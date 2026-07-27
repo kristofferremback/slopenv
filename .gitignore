@@ -1,0 +1,3 @@
+node_modules/
+# `bun build --compile` output (57 MB — never commit it)
+/slopenv

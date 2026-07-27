@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        # `slopenv --version` reads package.json, so a mismatch here would ship a
+        # binary that lies about which release it is. Fail loudly instead.
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PKG="v$(bun --print 'require("./package.json").version')"
+          echo "tag=$TAG package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $TAG does not match package.json version $PKG — bump package.json or retag"
+            exit 1
+          fi
+
+      - name: Test
+        run: bun test
+
+      - name: Build both macOS architectures
+        # Only macOS: set-secret has no backend elsewhere and fails on purpose, so
+        # shipping a Linux binary would just be a slower way to print that error.
+        run: |
+          mkdir -p dist
+          for target in bun-darwin-arm64 bun-darwin-x64; do
+            arch="${target#bun-darwin-}"
+            bun build --compile --minify --bytecode --target="$target" src/cli.ts --outfile "dist/slopenv-darwin-$arch"
+            tar -czf "dist/slopenv-darwin-$arch.tar.gz" -C dist "slopenv-darwin-$arch"
+            rm "dist/slopenv-darwin-$arch"
+          done
+          cd dist && shasum -a 256 *.tar.gz > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+
+          # A quoted heredoc so backticks and $(...) in the install snippet stay
+          # literal; the two placeholders are substituted afterwards.
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          ```sh
+          # Apple Silicon
+          curl -fsSL https://github.com/__REPO__/releases/download/__TAG__/slopenv-darwin-arm64.tar.gz | tar xz
+          # Intel: swap arm64 for x64
+
+          mv slopenv-darwin-* ~/.local/bin/slopenv     # or anywhere on your PATH
+          echo 'eval "$(slopenv hook zsh)"' >> ~/.zshrc
+          ```
+
+          Open a new shell, then run `slopenv doctor`.
+
+          macOS only: secrets live in the Keychain and there is no backend for other
+          platforms yet, so `set-secret` fails loudly rather than falling back to disk.
+          Check a download against `SHA256SUMS`.
+          NOTES
+
+          sed -i '' -e "s|__TAG__|$TAG|g" -e "s|__REPO__|$REPO|g" notes.md
+          cat notes.md
+
+          gh release create "$TAG" dist/* \
+            --title "slopenv $TAG" \
+            --notes-file notes.md \
+            --generate-notes

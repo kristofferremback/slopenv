@@ -1,0 +1,135 @@
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
+import { createContext, type Context } from "./context.ts";
+import { legacyRulesFilePath } from "./paths.ts";
+import { SlopenvError } from "./errors.ts";
+import { cmdEdit } from "./commands/edit.ts";
+import { cmdExport } from "./commands/export.ts";
+import { cmdHook } from "./commands/hook.ts";
+import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
+import { cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+
+import pkg from "../package.json";
+
+/** Single source of truth — the release workflow checks this against the git tag. */
+export const VERSION: string = pkg.version;
+
+const HELP = `slopenv ${VERSION} — directory-scoped environment variables, with secrets in the OS keychain
+
+usage: slopenv <command> [args]
+
+  set-secret NAME[=VALUE] [DIR]   store a secret in the keychain and add a rule
+                                  (omit =VALUE to be prompted, hidden, off the record)
+  set NAME[=VALUE] [DIR]          add a plain-text rule for a non-secret value
+                                  (asks first if the value looks like a credential)
+  rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
+  list                            show every rule (secret values are masked)
+  status [DIR]                    show what applies in a directory and which rule wins
+  doctor                          check the hook, the rules file and the keychain
+  edit                            open the rules file in $EDITOR
+  hook <zsh|bash> [--simple]      print the shell hook
+  export [DIR]                    internal: print the export/unset statements to eval
+
+common flags:
+  --dir DIR       the directory a rule applies to (defaults to the current one)
+  --value VALUE   pass a value that would otherwise be misread
+  --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
+  --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
+                  (--force / -f do the same thing)
+  --json          machine-readable output (\`list\`; never includes secret values)
+
+examples:
+  slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
+  slopenv set NODE_ENV=development ./
+  slopenv set-secret GITHUB_TOKEN=ghp_xxx ~/dev/oss
+  slopenv set "FULL_NAME=Kristoffer Remback"     # quote values containing spaces
+  slopenv set FULL_NAME="Kristoffer Remback"     # equivalent — your shell does the work
+
+DIR covers itself and everything under it. When two rules define the same
+variable, the deeper directory wins.
+
+environment:
+  SLOPENV_CONFIG   path to the rules file (default ~/.slopenv/rules.json)
+  SLOPENV_LOG=1    trace what slopenv is doing, on stderr
+`;
+
+type CommandFn = (argv: readonly string[], ctx: Context) => number;
+
+const COMMANDS: Record<string, CommandFn> = {
+  "set-secret": cmdSetSecret,
+  set: cmdSet,
+  rm: cmdRm,
+  list: cmdList,
+  status: cmdStatus,
+  doctor: cmdDoctor,
+  edit: cmdEdit,
+  hook: cmdHook,
+  export: cmdExport,
+};
+
+/**
+ * rules.json used to live under ~/.config. Say so once rather than starting from
+ * an empty rule set and letting someone wonder where their rules went.
+ *
+ * Never called from `export` — that runs on every `cd`, must stay silent, and
+ * must never be slowed down by a stat for a file that is almost never there.
+ */
+function warnAboutLegacyConfig(ctx: Context): void {
+  if (ctx.env.SLOPENV_CONFIG) return;
+
+  const legacy = legacyRulesFilePath(ctx.env);
+  if (legacy === ctx.rulesPath || existsSync(ctx.rulesPath) || !existsSync(legacy)) return;
+
+  ctx.err(`slopenv: found rules at ${legacy}, which is the old location.\n`);
+  ctx.err(`  slopenv now uses ${ctx.rulesPath}. To keep them:\n`);
+  ctx.err(`      mkdir -p ${dirname(ctx.rulesPath)} && mv ${legacy} ${ctx.rulesPath}\n`);
+}
+
+export function run(argv: readonly string[], ctx: Context): number {
+  const command = argv[0];
+
+  if (command === undefined || command === "--help" || command === "-h" || command === "help") {
+    ctx.out(HELP);
+    return command === undefined ? 1 : 0;
+  }
+  if (command === "--version" || command === "-v") {
+    ctx.out(`${VERSION}\n`);
+    return 0;
+  }
+
+  const fn = COMMANDS[command];
+  if (!fn) {
+    ctx.err(`slopenv: unknown command ${JSON.stringify(command)}\n`);
+    ctx.err(`Run \`slopenv --help\` for usage.\n`);
+    return 1;
+  }
+
+  // `export` is the hot path and its stdout is evaluated by the shell; `hook`
+  // just prints a snippet. Neither should stat anything it does not have to.
+  if (command !== "export" && command !== "hook") warnAboutLegacyConfig(ctx);
+
+  return fn(argv.slice(1), ctx);
+}
+
+/**
+ * Errors never reach stdout. `slopenv export` is `eval`d by the shell, so a
+ * diagnostic printed on stdout would be executed; a non-zero exit tells the hook
+ * to skip the eval entirely.
+ */
+export function main(argv: readonly string[]): number {
+  const ctx = createContext();
+  try {
+    return run(argv, ctx);
+  } catch (err) {
+    if (err instanceof SlopenvError) {
+      ctx.err(`slopenv: ${err.message}\n`);
+      return 1;
+    }
+    ctx.err(`slopenv: unexpected error\n${(err as Error).stack ?? String(err)}\n`);
+    return 1;
+  }
+}
+
+if (import.meta.main) {
+  process.exitCode = main(process.argv.slice(2));
+}

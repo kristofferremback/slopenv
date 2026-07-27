@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # macOS is not a preference here: the suite shells out to /usr/bin/security,
+    # sources the hook into a real zsh, and drives the confirmation prompt through
+    # a pty. None of that is meaningful on another platform.
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bunx tsc --noEmit --noUnusedLocals --noUnusedParameters
+
+      - name: Test
+        # The keychain integration tests stay off: a CI runner has no unlocked
+        # login keychain, and they would prompt rather than fail. Run them locally
+        # with SLOPENV_KEYCHAIN_IT=1.
+        run: bun test
+
+      - name: Build
+        run: bun run build
+
+      - name: Smoke-test the binary
+        run: |
+          ./slopenv --version
+          ./slopenv hook zsh > /tmp/hook.zsh
+          zsh -n /tmp/hook.zsh          # the generated hook must at least parse
+          ./slopenv hook bash | bash -n
+          export SLOPENV_CONFIG="$RUNNER_TEMP/rules.json"
+          mkdir -p "$RUNNER_TEMP/proj"
+          ./slopenv set NODE_ENV=development "$RUNNER_TEMP/proj"
+          ./slopenv list
+          ./slopenv export "$RUNNER_TEMP/proj" | grep -q "export NODE_ENV='development'"
+
+      - name: Upload build
+        uses: actions/upload-artifact@v5
+        with:
+          name: slopenv-${{ github.sha }}
+          path: slopenv
+          retention-days: 30
