@@ -53,7 +53,7 @@ function unquotedValueHint(command: string, name: string, value: string, strays:
   const joined = [value, ...strays].join(" ");
   fail(
     `${strays.map((s) => JSON.stringify(s)).join(", ")} is not a directory.\n` +
-      `  If the value has spaces in it, quote it — either way works:\n` +
+      `  If the value has spaces in it, quote it. Either way works:\n` +
       `      slopenv ${command} "${name}=${joined}"\n` +
       `      slopenv ${command} ${name}="${joined}"\n` +
       `  Or pass it separately:  slopenv ${command} ${name} --value "${joined}"`,
