@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { run } from "../src/cli.ts";
 import { createContext, type Context } from "../src/context.ts";
 import { MemorySecretStore } from "../src/secrets/memory.ts";
 
@@ -65,4 +66,15 @@ export function applyStatements(env: Record<string, string | undefined>, stateme
     if (!quoted.startsWith("'") || !quoted.endsWith("'")) throw new Error(`value not single-quoted: ${statement}`);
     env[name] = quoted.slice(1, -1).split(`'\\''`).join("'");
   }
+}
+
+/**
+ * `run` became async-capable when `update` landed, but every other command is
+ * still synchronous. This keeps the tests for those readable, and fails loudly
+ * if one of them quietly starts returning a promise.
+ */
+export function runSync(argv: readonly string[], ctx: Context): number {
+  const result = run(argv, ctx);
+  if (typeof result !== "number") throw new Error(`${argv[0]} returned a promise; await it in the test`);
+  return result;
 }

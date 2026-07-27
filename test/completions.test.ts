@@ -1,9 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { run } from "../src/cli.ts";
 import { shellQuote } from "../src/shell.ts";
-import { cleanup, harness, tempDir } from "./helpers.ts";
+import { cleanup, harness, tempDir, runSync } from "./helpers.ts";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 
@@ -18,16 +17,16 @@ beforeAll(() => {
   mkdirSync(join(proj, "apps"), { recursive: true });
 
   const h = harness({ rulesPath, cwd: proj, env: {} });
-  run(["set", "NODE_ENV=development", proj], h.ctx);
-  run(["set", "PORT=3000", join(proj, "apps")], h.ctx);
-  run(["set", "FULL_NAME=Kris R", proj], h.ctx);
+  runSync(["set", "NODE_ENV=development", proj], h.ctx);
+  runSync(["set", "PORT=3000", join(proj, "apps")], h.ctx);
+  runSync(["set", "FULL_NAME=Kris R", proj], h.ctx);
 });
 
 afterAll(() => cleanup(root));
 
 function cli(args: string[]): { code: number; stdout: string } {
   const h = harness({ rulesPath, cwd: proj, env: {} });
-  const code = run(args, h.ctx);
+  const code = runSync(args, h.ctx);
   return { code, stdout: h.stdout() };
 }
 
@@ -43,21 +42,21 @@ describe("the lists completion reads", () => {
 
   test("neither reads the keychain, so both stay fast enough for a TAB press", () => {
     const h = harness({ rulesPath, cwd: proj, env: {} });
-    run(["set-secret", "SECRET_ONE=v", proj], h.ctx);
+    runSync(["set-secret", "SECRET_ONE=v", proj], h.ctx);
     h.store.reads.length = 0;
 
-    run(["list", "--names"], h.ctx);
-    run(["list", "--dirs"], h.ctx);
+    runSync(["list", "--names"], h.ctx);
+    runSync(["list", "--dirs"], h.ctx);
     expect(h.store.reads).toEqual([]);
 
-    run(["rm", "SECRET_ONE", proj], h.ctx);
+    runSync(["rm", "SECRET_ONE", proj], h.ctx);
   });
 
   test("an empty rule set produces empty output rather than a message", () => {
     const empty = join(root, "empty.json");
     writeFileSync(empty, JSON.stringify({ version: 1, rules: [] }));
     const h = harness({ rulesPath: empty, cwd: proj, env: {} });
-    run(["list", "--names"], h.ctx);
+    runSync(["list", "--names"], h.ctx);
     expect(h.stdout()).toBe("");
   });
 });

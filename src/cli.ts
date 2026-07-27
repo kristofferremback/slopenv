@@ -9,11 +9,10 @@ import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
 import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
 import { cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+import { cmdUpdate } from "./commands/update.ts";
+import { VERSION } from "./version.ts";
 
-import pkg from "../package.json";
-
-/** Single source of truth — the release workflow checks this against the git tag. */
-export const VERSION: string = pkg.version;
+export { VERSION } from "./version.ts";
 
 const HELP = `slopenv ${VERSION} — directory-scoped environment variables, with secrets in the OS keychain
 
@@ -27,6 +26,7 @@ usage: slopenv <command> [args]
   list                            show every rule (secret values are masked)
   status [DIR]                    show what applies in a directory and which rule wins
   doctor                          check the hook, the rules file and the keychain
+  update [--check]                update to the latest release from GitHub
   edit                            open the rules file in $EDITOR
   hook <zsh|bash> [--simple]      print the shell hook
   completions <zsh|bash>          print the shell completion script
@@ -56,7 +56,7 @@ environment:
   SLOPENV_LOG=1    trace what slopenv is doing, on stderr
 `;
 
-type CommandFn = (argv: readonly string[], ctx: Context) => number;
+type CommandFn = (argv: readonly string[], ctx: Context) => number | Promise<number>;
 
 const COMMANDS: Record<string, CommandFn> = {
   "set-secret": cmdSetSecret,
@@ -68,6 +68,7 @@ const COMMANDS: Record<string, CommandFn> = {
   edit: cmdEdit,
   hook: cmdHook,
   completions: cmdCompletions,
+  update: cmdUpdate,
   export: cmdExport,
 };
 
@@ -89,7 +90,7 @@ function warnAboutLegacyConfig(ctx: Context): void {
   ctx.err(`      mkdir -p ${dirname(ctx.rulesPath)} && mv ${legacy} ${ctx.rulesPath}\n`);
 }
 
-export function run(argv: readonly string[], ctx: Context): number {
+export function run(argv: readonly string[], ctx: Context): number | Promise<number> {
   const command = argv[0];
 
   if (command === undefined || command === "--help" || command === "-h" || command === "help") {
@@ -120,10 +121,10 @@ export function run(argv: readonly string[], ctx: Context): number {
  * diagnostic printed on stdout would be executed; a non-zero exit tells the hook
  * to skip the eval entirely.
  */
-export function main(argv: readonly string[]): number {
+export async function main(argv: readonly string[]): Promise<number> {
   const ctx = createContext();
   try {
-    return run(argv, ctx);
+    return await run(argv, ctx);
   } catch (err) {
     if (err instanceof SlopenvError) {
       ctx.err(`slopenv: ${err.message}\n`);
@@ -135,5 +136,14 @@ export function main(argv: readonly string[]): number {
 }
 
 if (import.meta.main) {
-  process.exitCode = main(process.argv.slice(2));
+  // Not top-level await: `bun build --compile --bytecode` rejects it.
+  main(process.argv.slice(2)).then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (err: unknown) => {
+      process.stderr.write(`slopenv: unexpected error\n${(err as Error).stack ?? String(err)}\n`);
+      process.exitCode = 1;
+    },
+  );
 }

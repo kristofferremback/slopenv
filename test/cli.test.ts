@@ -1,11 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { run } from "../src/cli.ts";
 import { accountFor } from "../src/secrets/index.ts";
 import { loadRules } from "../src/rules.ts";
 import { STATE_VAR } from "../src/state.ts";
-import { cleanup, harness, tempDir, type Harness } from "./helpers.ts";
+import { cleanup, harness, tempDir, type Harness, runSync } from "./helpers.ts";
 import { realpathSync } from "node:fs";
 
 let root: string;
@@ -27,7 +26,7 @@ afterEach(() => cleanup(root));
 
 function cli(...argv: string[]): number {
   h.reset();
-  return run(argv, h.ctx);
+  return runSync(argv, h.ctx);
 }
 
 describe("argument grammar", () => {
@@ -236,16 +235,16 @@ describe("doctor", () => {
 
   test("passes when the hook is active and everything resolves", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    run(["set-secret", "TOKEN=v"], hooked.ctx);
-    expect(run(["doctor"], hooked.ctx)).toBe(0);
+    runSync(["set-secret", "TOKEN=v"], hooked.ctx);
+    expect(runSync(["doctor"], hooked.ctx)).toBe(0);
     expect(hooked.stdout()).toContain("no problems found");
   });
 
   test("flags a rule whose keychain entry is gone", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    run(["set-secret", "TOKEN=v"], hooked.ctx);
+    runSync(["set-secret", "TOKEN=v"], hooked.ctx);
     hooked.store.entries.clear();
-    expect(run(["doctor"], hooked.ctx)).toBe(1);
+    expect(runSync(["doctor"], hooked.ctx)).toBe(1);
     expect(hooked.stdout()).toContain("no keychain entry");
   });
 
@@ -253,9 +252,9 @@ describe("doctor", () => {
     const gone = join(root, "temporary");
     mkdirSync(gone);
     const hooked = harness({ rulesPath, cwd: gone, env: { [STATE_VAR]: "x" } });
-    run(["set", "TOKEN=v"], hooked.ctx);
+    runSync(["set", "TOKEN=v"], hooked.ctx);
     cleanup(gone);
-    expect(run(["doctor"], hooked.ctx)).toBe(1);
+    expect(runSync(["doctor"], hooked.ctx)).toBe(1);
     expect(hooked.stdout()).toContain("directory no longer exists");
   });
 });
@@ -303,7 +302,7 @@ describe("export", () => {
     const broken = harness({ rulesPath, cwd: work });
     let code: number;
     try {
-      code = run(["export", work], broken.ctx);
+      code = runSync(["export", work], broken.ctx);
     } catch {
       code = 1; // main() turns this into a non-zero exit with a stderr message
     }
@@ -384,7 +383,7 @@ describe("plain-text credential guard", () => {
       }),
     );
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    expect(run(["doctor"], hooked.ctx)).toBe(1);
+    expect(runSync(["doctor"], hooked.ctx)).toBe(1);
     expect(hooked.stdout()).toContain("looks like a GitHub token, stored in plain text");
     expect(hooked.stdout()).toContain("slopenv set-secret LEAKED");
   });
@@ -404,7 +403,7 @@ describe("edit", () => {
       JSON.stringify({ version: 1, rules: [{ dir: work, name: "EDITED", source: "plain", value: "by-editor" }] }),
     );
     const h2 = harness({ rulesPath, cwd: work, env: { EDITOR: editor } });
-    expect(run(["edit"], h2.ctx)).toBe(0);
+    expect(runSync(["edit"], h2.ctx)).toBe(0);
     expect(loadRules(rulesPath).rules).toEqual([{ dir: work, name: "EDITED", source: "plain", value: "by-editor" }]);
   });
 
@@ -413,7 +412,7 @@ describe("edit", () => {
     const before = readFileSync(rulesPath, "utf8");
     const editor = editorThatWrites("{ not json");
     const h2 = harness({ rulesPath, cwd: work, env: { EDITOR: editor } });
-    expect(() => run(["edit"], h2.ctx)).toThrow(/rules file is invalid/);
+    expect(() => runSync(["edit"], h2.ctx)).toThrow(/rules file is invalid/);
     expect(readFileSync(rulesPath, "utf8")).toBe(before);
   });
 
@@ -424,13 +423,13 @@ describe("edit", () => {
       JSON.stringify({ version: 1, rules: [{ dir: work, name: "T", source: "keychain", value: "leaked" }] }),
     );
     const h2 = harness({ rulesPath, cwd: work, env: { EDITOR: editor } });
-    expect(() => run(["edit"], h2.ctx)).toThrow(/must not be set for a keychain rule/);
+    expect(() => runSync(["edit"], h2.ctx)).toThrow(/must not be set for a keychain rule/);
     expect(readFileSync(rulesPath, "utf8")).toBe(before);
   });
 
   test("without $EDITOR it says so", () => {
     const h2 = harness({ rulesPath, cwd: work, env: {} });
-    expect(() => run(["edit"], h2.ctx)).toThrow(/no \$EDITOR/);
+    expect(() => runSync(["edit"], h2.ctx)).toThrow(/no \$EDITOR/);
   });
 });
 
@@ -476,8 +475,8 @@ describe("the hook not being wired up", () => {
 
   test("and stays quiet once the hook is in", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    expect(run(["set", "NODE_ENV=development", work], hooked.ctx)).toBe(0);
-    expect(run(["list"], hooked.ctx)).toBe(0);
+    expect(runSync(["set", "NODE_ENV=development", work], hooked.ctx)).toBe(0);
+    expect(runSync(["list"], hooked.ctx)).toBe(0);
     expect(hooked.stderr()).toBe("");
   });
 

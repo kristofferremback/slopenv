@@ -89,6 +89,17 @@ DIRECTORY          VARIABLE                 SOURCE    VALUE    ALIAS
 ~/dev/threa/apps   PORT                     plain     3000
 ```
 
+### Staying up to date
+
+```sh
+slopenv update           # download the latest release and replace the binary
+slopenv update --check   # report only, change nothing
+```
+
+The download is verified against the release's `SHA256SUMS` before it is unpacked, and the new binary is run and asked its version before the old one is overwritten. If either check fails, the binary you have keeps working. The swap itself is a `rename` inside the target's own directory, so there is never a half-written binary on your PATH.
+
+It refuses rather than guessing when the install is not its to replace: running from source under Bun, a build sitting inside a clone of this repo, or a directory you cannot write to. Each case says what to do instead.
+
 ### Completion
 
 `eval "$(slopenv hook zsh)"` installs completion along with the hook, so there is nothing else to add. `slopenv completions zsh` prints it on its own if you would rather keep the two separate, and `slopenv completions bash` does the same for bash.
@@ -259,8 +270,8 @@ The test suite runs 16 concurrent writers and checks that all 16 rules survive.
 ## Development
 
 ```sh
-bun test                          # 271 tests
-SLOPENV_KEYCHAIN_IT=1 bun test    # 281, incl. 10 against your real login keychain
+bun test                          # 298 tests
+SLOPENV_KEYCHAIN_IT=1 bun test    # 308, incl. 10 against your real login keychain
 bunx tsc --noEmit
 bun run build
 ```
@@ -269,7 +280,7 @@ bun run build
 
 CI runs the suite, a typecheck and a binary smoke test on macOS for every push. Pushing a `v*` tag builds both macOS architectures and attaches them to a GitHub release with `SHA256SUMS`. The workflow refuses to publish if the tag and `package.json` version disagree, since `slopenv --version` reads the latter.
 
-The suite covers path matching (nesting, sibling prefixes, symlinks), the diff and restore semantics (enter, leave, re-enter, nested override, pre-existing value), shell quoting of 19 hostile values against real zsh and real bash, the rules-file round trip, lock behaviour, and an end-to-end zsh session that `cd`s around and reads the environment back, including checks on how many times the binary was spawned. Completion is tested by driving an interactive zsh through a pty and pressing TAB, since a completion script that loads is not the same as one that works.
+The suite covers path matching (nesting, sibling prefixes, symlinks), the diff and restore semantics (enter, leave, re-enter, nested override, pre-existing value), shell quoting of 19 hostile values against real zsh and real bash, the rules-file round trip, lock behaviour, and an end-to-end zsh session that `cd`s around and reads the environment back, including checks on how many times the binary was spawned. Completion is tested by driving an interactive zsh through a pty and pressing TAB, since a completion script that loads is not the same as one that works. `update` is tested end to end against a fake release served from a local HTTP server, including a corrupted download and a missing checksum file, so the failure paths are exercised without the network.
 
 ## Uninstall
 

@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { run } from "../src/cli.ts";
 import { legacyRulesFilePath, rulesFilePath, slopenvHome } from "../src/paths.ts";
-import { cleanup, harness, tempDir } from "./helpers.ts";
+import { cleanup, harness, tempDir, runSync } from "./helpers.ts";
 
 const dirs: string[] = [];
 function scratch(): string {
@@ -58,7 +57,7 @@ describe("rules left behind at the old location", () => {
     const { home, env } = homeWithLegacyRules();
     const h = harness({ rulesPath: rulesFilePath(env), cwd: home, env });
 
-    run(["list"], h.ctx);
+    runSync(["list"], h.ctx);
 
     expect(h.stderr()).toContain("which is the old location");
     expect(h.stderr()).toContain(join(home, ".config", "slopenv", "rules.json"));
@@ -70,7 +69,7 @@ describe("rules left behind at the old location", () => {
     const { home, env } = homeWithLegacyRules();
     const h = harness({ rulesPath: rulesFilePath(env), cwd: home, env });
 
-    run(["list"], h.ctx);
+    runSync(["list"], h.ctx);
 
     // Nothing created, nothing removed, and the listing is honestly empty.
     expect(Bun.file(join(home, ".slopenv", "rules.json")).size).toBe(0);
@@ -85,7 +84,7 @@ describe("rules left behind at the old location", () => {
     writeFileSync(newPath, JSON.stringify({ version: 1, rules: [] }));
 
     const h = harness({ rulesPath: newPath, cwd: home, env });
-    run(["list"], h.ctx);
+    runSync(["list"], h.ctx);
     expect(h.stderr()).toBe("");
   });
 
@@ -95,7 +94,7 @@ describe("rules left behind at the old location", () => {
     const env: NodeJS.ProcessEnv = { HOME: home, SLOPENV_CONFIG: explicit };
 
     const h = harness({ rulesPath: explicit, cwd: home, env });
-    run(["list"], h.ctx);
+    runSync(["list"], h.ctx);
     expect(h.stderr()).toBe("");
   });
 
@@ -103,7 +102,7 @@ describe("rules left behind at the old location", () => {
     const { home, env } = homeWithLegacyRules();
     const h = harness({ rulesPath: rulesFilePath(env), cwd: home, env });
 
-    run(["export", home], h.ctx);
+    runSync(["export", home], h.ctx);
     expect(h.stderr()).toBe("");
   });
 });
