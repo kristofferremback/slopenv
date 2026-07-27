@@ -354,12 +354,14 @@ describe("plain-text credential guard", () => {
     expect(cli("set", "NODE_ENV=development", work)).toBe(0);
     expect(cli("set", "PORT=3000", work)).toBe(0);
     expect(cli("set", "AWS_REGION=eu-north-1", work)).toBe(0);
-    expect(h.stderr()).toBe("");
+    expect(h.stderr()).not.toContain("looks like");
+    expect(h.stderr()).not.toContain("plain text");
   });
 
-  test("set-secret never asks — that is the whole point of it", () => {
+  test("set-secret never asks, since the value is going to the keychain", () => {
     expect(cli("set-secret", "TOKEN=sk-ant-oat01-abcdefghijklmnop", work)).toBe(0);
-    expect(h.stderr()).toBe("");
+    expect(h.stderr()).not.toContain("looks like");
+    expect(h.stderr()).not.toContain("Store it in plain text");
   });
 
   test("a value that only looks like a flag is still a value", () => {
@@ -446,5 +448,43 @@ describe("cli surface", () => {
   test("--help and --version succeed", () => {
     expect(cli("--help")).toBe(0);
     expect(cli("--version")).toBe(0);
+  });
+});
+
+describe("the hook not being wired up", () => {
+  // The first failure everyone hits: binary installed, rule stored, nothing
+  // injected, and no indication why. `doctor` alone was not enough, because
+  // nobody runs `doctor` when they think things are working.
+  test("set-secret says so straight after storing", () => {
+    expect(cli("set-secret", "TOKEN=v", work)).toBe(0);
+    expect(h.stdout()).toContain("TOKEN");
+    expect(h.stderr()).toContain("the shell hook is not active here");
+    expect(h.stderr()).toContain('eval "$(slopenv hook zsh)"');
+  });
+
+  test("set says so too", () => {
+    expect(cli("set", "NODE_ENV=development", work)).toBe(0);
+    expect(h.stderr()).toContain("the shell hook is not active here");
+  });
+
+  test("list says so, since a rule that is not being applied looks identical", () => {
+    cli("set", "NODE_ENV=development", work);
+    cli("list");
+    expect(h.stdout()).toContain("NODE_ENV");
+    expect(h.stderr()).toContain("the shell hook is not active here");
+  });
+
+  test("and stays quiet once the hook is in", () => {
+    const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
+    expect(run(["set", "NODE_ENV=development", work], hooked.ctx)).toBe(0);
+    expect(run(["list"], hooked.ctx)).toBe(0);
+    expect(hooked.stderr()).toBe("");
+  });
+
+  test("the notice goes to stderr, never stdout", () => {
+    // `list --json` is piped into other tools; a notice on stdout would corrupt it.
+    cli("set", "NODE_ENV=development", work);
+    cli("list", "--json");
+    expect(() => JSON.parse(h.stdout())).not.toThrow();
   });
 });

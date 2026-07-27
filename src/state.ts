@@ -22,6 +22,27 @@ export interface State {
   active: Record<string, ActiveEntry>;
 }
 
+/**
+ * Is the shell hook wired into this shell? `export` is the only thing that sets
+ * SLOPENV_STATE, so its absence means nothing is injecting anything.
+ */
+export function hookIsActive(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(env[STATE_VAR]);
+}
+
+/**
+ * The failure everyone hits first: the binary is installed, the rule is stored,
+ * and nothing happens, because the one line that connects the two is missing.
+ * Worth saying at the moment of confusion rather than only in `doctor`.
+ */
+export function hookInactiveNotice(): string {
+  return (
+    `slopenv: the shell hook is not active here, so nothing is being injected yet.\n` +
+    `  Run this to wire up the shell you are in now:  eval "$(slopenv hook zsh)"\n` +
+    `  Add the same line to ~/.zshrc to make it stick.\n`
+  );
+}
+
 export function emptyState(): State {
   return { v: STATE_VERSION, rev: "", active: {} };
 }

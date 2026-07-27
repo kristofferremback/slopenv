@@ -7,7 +7,7 @@ import { resolvePwd, resolveRuleDir } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
 import { loadRules, type Rule } from "../rules.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
-import { decodeState, STATE_VAR } from "../state.ts";
+import { decodeState, hookInactiveNotice, hookIsActive, STATE_VAR } from "../state.ts";
 
 function tilde(path: string, home = homedir()): string {
   return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
@@ -74,6 +74,7 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
   }
 
   table(rows, ctx.out);
+  if (!hookIsActive(ctx.env)) ctx.err(`\n${hookInactiveNotice()}`);
   return 0;
 }
 

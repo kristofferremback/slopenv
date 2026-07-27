@@ -15,6 +15,7 @@ import {
   type Rule,
   type RulesFile,
 } from "../rules.ts";
+import { hookInactiveNotice, hookIsActive } from "../state.ts";
 
 const MUTATE_SPEC = {
   value: ["dir", "value", "alias"],
@@ -228,6 +229,7 @@ export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
   }
 
   ctx.out(`${describe(stored as Rule, maskSecret(value))}\n`);
+  if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
   return 0;
 }
 
@@ -267,6 +269,7 @@ export function cmdSet(argv: readonly string[], ctx: Context): number {
   }
 
   ctx.out(`${describe(stored as Rule, value)}\n`);
+  if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
   return 0;
 }
 
