@@ -3,6 +3,7 @@ import type { Context } from "../context.ts";
 import { fail } from "../errors.ts";
 import { parseArgs } from "../args.ts";
 import { shellQuote } from "../shell.ts";
+import { bashCompletions, zshCompletions } from "./completions.ts";
 
 /**
  * How the shell should invoke us. When running from a compiled binary that is
@@ -40,6 +41,8 @@ if [[ -z \${_SLOPENV_HOOK_LOADED:-} ]]; then
   autoload -Uz add-zsh-hook
   add-zsh-hook chpwd _slopenv_hook
   _slopenv_hook
+
+${zshCompletions()}
 fi
 `;
   }
@@ -90,6 +93,8 @@ if [[ -z \${_SLOPENV_HOOK_LOADED:-} ]]; then
   add-zsh-hook chpwd _slopenv_hook
   add-zsh-hook precmd _slopenv_hook
   _slopenv_hook
+
+${zshCompletions()}
 fi
 `;
 }
@@ -120,6 +125,8 @@ if [ -z "\${_SLOPENV_HOOK_LOADED:-}" ]; then
     *) PROMPT_COMMAND="_slopenv_hook\${PROMPT_COMMAND:+;\$PROMPT_COMMAND}" ;;
   esac
   _slopenv_hook
+
+${bashCompletions()}
 fi
 `;
 }

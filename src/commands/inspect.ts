@@ -41,8 +41,19 @@ function table(rows: readonly string[][], out: (text: string) => void): void {
  * and not enough to use one.
  */
 export function cmdList(argv: readonly string[], ctx: Context): number {
-  const args = parseArgs(argv, { boolean: ["json"] });
+  const args = parseArgs(argv, { boolean: ["json", "names", "dirs"] });
   const rules = sortRules(loadRules(ctx.rulesPath).rules);
+
+  // Plain lists for scripting and for shell completion. Neither touches the
+  // keychain, so they stay fast enough to sit behind a TAB press.
+  if (args.flags.has("names")) {
+    for (const name of [...new Set(rules.map((r) => r.name))].sort()) ctx.out(`${name}\n`);
+    return 0;
+  }
+  if (args.flags.has("dirs")) {
+    for (const dir of [...new Set(rules.map((r) => r.dir))].sort()) ctx.out(`${dir}\n`);
+    return 0;
+  }
 
   if (args.flags.has("json")) {
     // Deliberately never resolves keychain values — machine-readable output is

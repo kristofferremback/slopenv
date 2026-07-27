@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { createContext, type Context } from "./context.ts";
 import { legacyRulesFilePath } from "./paths.ts";
 import { SlopenvError } from "./errors.ts";
+import { cmdCompletions } from "./commands/completions.ts";
 import { cmdEdit } from "./commands/edit.ts";
 import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
@@ -28,6 +29,7 @@ usage: slopenv <command> [args]
   doctor                          check the hook, the rules file and the keychain
   edit                            open the rules file in $EDITOR
   hook <zsh|bash> [--simple]      print the shell hook
+  completions <zsh|bash>          print the shell completion script
   export [DIR]                    internal: print the export/unset statements to eval
 
 common flags:
@@ -37,6 +39,7 @@ common flags:
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
                   (--force / -f do the same thing)
   --json          machine-readable output (\`list\`; never includes secret values)
+  --names/--dirs  plain one-per-line output (\`list\`), for scripts and completion
 
 examples:
   slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
@@ -64,6 +67,7 @@ const COMMANDS: Record<string, CommandFn> = {
   doctor: cmdDoctor,
   edit: cmdEdit,
   hook: cmdHook,
+  completions: cmdCompletions,
   export: cmdExport,
 };
 

@@ -52,6 +52,10 @@ Open a new shell, then check everything is wired up:
 slopenv doctor
 ```
 
+`slopenv doctor` is the thing to run when a rule exists but nothing is being injected. Installing the binary and adding the hook line are two separate steps, and doing only the first leaves `slopenv list` showing rules that never take effect.
+
+That one line also sets up tab completion. See [Completion](#completion).
+
 ## Usage
 
 ```sh
@@ -85,6 +89,25 @@ DIRECTORY          VARIABLE                 SOURCE    VALUE    ALIAS
 ~/dev/threa/apps   PORT                     plain     3000
 ```
 
+### Completion
+
+`eval "$(slopenv hook zsh)"` installs completion along with the hook, so there is nothing else to add. `slopenv completions zsh` prints it on its own if you would rather keep the two separate, and `slopenv completions bash` does the same for bash.
+
+It completes your own rules, not just the command names:
+
+```
+$ slopenv rm <TAB>
+FULL_NAME  NODE_ENV  PORT              # the variables you have registered
+
+$ slopenv rm PO<TAB>
+$ slopenv rm PORT
+
+$ slopenv set NODE_ENV <TAB>
+~/dev/threa  ~/dev/threa/apps          # directories those rules cover, then any directory
+```
+
+The candidates come from `slopenv list --names` and `slopenv list --dirs`, which print one item per line and never read the keychain, so they are cheap enough to sit behind a TAB press. Both are also useful on their own for scripting.
+
 ### Argument grammar
 
 | Form | Meaning |
@@ -94,6 +117,7 @@ DIRECTORY          VARIABLE                 SOURCE    VALUE    ALIAS
 | `slopenv set NAME VALUE DIR` | three-positional form, also accepted |
 | `--dir DIR` / `--value VALUE` | for anything that would otherwise be misread |
 | `--yes` / `-y` (or `--force` / `-f`) | skip the credential confirmation described below |
+| `--names` / `--dirs` on `list` | one variable name or rule directory per line |
 
 With a bare `NAME`, a second positional is always a directory. `DIR` defaults to the current directory. Trailing newlines are trimmed from prompted and piped values.
 
@@ -235,8 +259,8 @@ The test suite runs 16 concurrent writers and checks that all 16 rules survive.
 ## Development
 
 ```sh
-bun test                          # 253 tests
-SLOPENV_KEYCHAIN_IT=1 bun test    # 263, incl. 10 against your real login keychain
+bun test                          # 271 tests
+SLOPENV_KEYCHAIN_IT=1 bun test    # 281, incl. 10 against your real login keychain
 bunx tsc --noEmit
 bun run build
 ```
@@ -245,7 +269,7 @@ bun run build
 
 CI runs the suite, a typecheck and a binary smoke test on macOS for every push. Pushing a `v*` tag builds both macOS architectures and attaches them to a GitHub release with `SHA256SUMS`. The workflow refuses to publish if the tag and `package.json` version disagree, since `slopenv --version` reads the latter.
 
-The suite covers path matching (nesting, sibling prefixes, symlinks), the diff and restore semantics (enter, leave, re-enter, nested override, pre-existing value), shell quoting of 19 hostile values against real zsh and real bash, the rules-file round trip, lock behaviour, and an end-to-end zsh session that `cd`s around and reads the environment back, including checks on how many times the binary was spawned.
+The suite covers path matching (nesting, sibling prefixes, symlinks), the diff and restore semantics (enter, leave, re-enter, nested override, pre-existing value), shell quoting of 19 hostile values against real zsh and real bash, the rules-file round trip, lock behaviour, and an end-to-end zsh session that `cd`s around and reads the environment back, including checks on how many times the binary was spawned. Completion is tested by driving an interactive zsh through a pty and pressing TAB, since a completion script that loads is not the same as one that works.
 
 ## Uninstall
 
