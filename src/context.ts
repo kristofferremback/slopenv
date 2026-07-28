@@ -9,6 +9,12 @@ export interface Context {
   out(text: string): void;
   /** stderr. Everything diagnostic. */
   err(text: string): void;
+  /**
+   * True when stdout is a terminal — i.e. nothing is capturing it. `off` and `on`
+   * only mean anything when a shell is evaluating what they print, and this is how
+   * they tell that nobody is.
+   */
+  stdoutIsTty: boolean;
   /** Lazy so commands that never touch secrets work on unsupported platforms. */
   secretStore(): SecretStore;
 }
@@ -19,6 +25,7 @@ export interface ContextOverrides {
   cwd?: string;
   out?(text: string): void;
   err?(text: string): void;
+  stdoutIsTty?: boolean;
   store?: SecretStore;
 }
 
@@ -32,6 +39,7 @@ export function createContext(overrides: ContextOverrides = {}): Context {
     cwd: overrides.cwd ?? process.cwd(),
     out: overrides.out ?? ((text) => process.stdout.write(text)),
     err: overrides.err ?? ((text) => process.stderr.write(text)),
+    stdoutIsTty: overrides.stdoutIsTty ?? process.stdout.isTTY === true,
     secretStore() {
       cached ??= defaultSecretStore();
       return cached;

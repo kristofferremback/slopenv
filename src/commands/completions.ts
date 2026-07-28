@@ -20,6 +20,8 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["set", "add a plain-text rule for a non-secret value"],
   ["link", "apply a value you already have elsewhere to another directory"],
   ["rm", "remove a rule, and its keychain entry if it had one"],
+  ["off", "unload the variables in this shell only, until you leave or turn it on"],
+  ["on", "load them again after turning them off"],
   ["list", "show every rule"],
   ["status", "show what applies in a directory and which rule wins"],
   ["doctor", "check the hook, the rules file and the keychain"],

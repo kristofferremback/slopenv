@@ -1,4 +1,4 @@
-import { resolveRules } from "./match.ts";
+import { dirCovers, resolveRules } from "./match.ts";
 import { effectiveRule, type Rule } from "./rules.ts";
 import type { SecretStore } from "./secrets/index.ts";
 import { exportStatement, unsetStatement } from "./shell.ts";
@@ -22,6 +22,8 @@ export interface Plan {
   state: State;
   /** Non-fatal problems for stderr, e.g. a rule whose keychain entry is missing. */
   warnings: string[];
+  /** The directory a pause was pinned to, on the run that ends it. */
+  resumedFrom: string | null;
 }
 
 /**
@@ -33,11 +35,21 @@ export interface Plan {
  * crucially do not touch the keychain), the winning rule changed because a nested
  * directory overrides an ancestor (re-export), and the variable left scope
  * (restore whatever the shell had before slopenv, direnv-style).
+ *
+ * A pause (`slopenv off`) is a fourth situation, and it reuses the third: while it
+ * holds nothing is desired, so everything active takes the ordinary leave-scope
+ * path and the shell's own values come back. Leaving the paused directory ends it.
  */
 export function computePlan(input: PlanInput): Plan {
   const { rules, pwd, prevState, env, store, rev } = input;
 
-  const desired = resolveRules(rules, pwd);
+  // The pause is pinned to a directory rather than to the shell alone, so that
+  // walking out of the project is enough to end it — the exit you cannot forget
+  // to take, unlike `slopenv on`.
+  const paused = prevState.paused !== null && dirCovers(prevState.paused, pwd) ? prevState.paused : null;
+  const resumedFrom = prevState.paused !== null && paused === null ? prevState.paused : null;
+
+  const desired = paused === null ? resolveRules(rules, pwd) : new Map<string, Rule>();
   const warnings: string[] = [];
   const nextActive: Record<string, ActiveEntry> = {};
   const activations: string[] = [];
@@ -99,7 +111,8 @@ export function computePlan(input: PlanInput): Plan {
 
   return {
     statements: [...deactivations, ...activations],
-    state: { ...emptyState(), rev, active: nextActive },
+    state: { ...emptyState(), rev, active: nextActive, paused },
     warnings,
+    resumedFrom,
   };
 }

@@ -75,6 +75,10 @@ slopenv set NODE_ENV ./              # prompts, echo on
 # Apply a value you already have to a second directory, without copying it.
 slopenv link CLAUDE_CODE_OAUTH_TOKEN --from ~/dev/threa
 
+# Turn it off in this terminal for a while, without changing any rule.
+slopenv off
+slopenv on
+
 slopenv list      # every rule; secret values shown as •••1234
 slopenv status    # what applies right here, and which rule won
 slopenv rm CLAUDE_CODE_OAUTH_TOKEN ./
@@ -124,6 +128,31 @@ slopenv: 1 rule links to CLAUDE_CODE_OAUTH_TOKEN in /Users/you/dev/threa:
 
 Removing the link itself (`slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa-web`) never touches the value or the keychain. Giving a linked directory its own value with `set` or `set-secret` replaces the link, and says so.
 
+### Turning it off for a bit
+
+Sometimes you want the repo's variables out of the way — running something against a different token, or checking what a tool does with nothing set. `slopenv off` unloads them in the terminal you are standing in:
+
+```
+$ slopenv off
+slopenv: off in this shell — unloaded CLAUDE_CODE_OAUTH_TOKEN, NODE_ENV.
+  back on when you leave ~/dev/threa, or now with:  slopenv on
+```
+
+Nothing is written and no rule changes. Other terminals are unaffected, and so is the next one you open: the pause lives in `$SLOPENV_STATE`, so it is session-scoped by construction rather than by policy.
+
+It ends in one of two ways. `slopenv on` ends it where you stand. Otherwise walking out of the directory ends it, and says so rather than changing things behind your back:
+
+```
+$ cd ~/dev
+slopenv: env vars are on again — the pause ended when you left ~/dev/threa.
+```
+
+The pause is pinned to the rule directory that owns the variables, not to `$PWD`, so moving around inside the project keeps it off — including into subdirectories with rules of their own. Where several rules apply, it pins to the deepest, which biases towards ending too early rather than too late: ending early is visible and one word to undo, while ending late means standing in an unrelated repo with variables missing and nothing to connect that to something you did an hour ago.
+
+Whatever your shell had before slopenv touched a variable comes back for the duration, exactly as it does when you leave the directory. `slopenv status` and `slopenv doctor` both report a pause, since it is otherwise invisible and it is precisely the state in which you go looking.
+
+`off` and `on` have to change the shell that ran them, so they work through a `slopenv` shell function that `eval`s their output; `eval "$(slopenv hook zsh)"` installs it along with everything else. If it is missing — an older hook still loaded in a long-lived terminal — they say so instead of printing shell statements at you.
+
 ### Staying up to date
 
 ```sh
@@ -169,6 +198,7 @@ The candidates come from `slopenv list --names` and `slopenv list --dirs`, which
 | `--yes` / `-y` (or `--force` / `-f`) | skip the credential confirmation described below |
 | `--force` / `-f` on `rm` | also remove the rules that link to the one being removed |
 | `--names` / `--dirs` on `list` | one variable name or rule directory per line |
+| `slopenv off` / `slopenv on` | unload and reload in the current shell |
 
 With a bare `NAME`, a second positional is always a directory. `DIR` defaults to the current directory. Trailing newlines are trimmed from prompted and piped values.
 
@@ -280,7 +310,7 @@ There is no Linux backend yet. Rather than fall back to plaintext, `set-secret` 
 A child process cannot change its parent shell's environment, so slopenv is two pieces, direnv-style:
 
 1. The CLI manages `rules.json` and keychain entries.
-2. The shell hook runs `slopenv export "$PWD"` on `cd` and `eval`s its output, a series of `export` and `unset` statements.
+2. The shell hook runs `slopenv export "$PWD"` on `cd` and `eval`s its output, a series of `export` and `unset` statements. It also defines a `slopenv` shell function, so that `off` and `on` — the two commands whose job is to change the calling shell — get the same treatment. Everything else passes through it untouched.
 
 On each run, slopenv works out what should be active for `$PWD`, diffs it against what `$SLOPENV_STATE` says is active, and emits only the difference. The keychain is read when a variable newly activates, rather than on every `cd`.
 

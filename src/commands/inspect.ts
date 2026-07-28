@@ -1,17 +1,12 @@
 import { existsSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { parseArgs } from "../args.ts";
 import type { Context } from "../context.ts";
 import { dirCovers, resolveRules } from "../match.ts";
-import { resolvePwd, resolveRuleDir } from "../paths.ts";
+import { resolvePwd, resolveRuleDir, tilde } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
 import { effectiveRule, loadRules, type Rule } from "../rules.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
 import { decodeState, hookInactiveNotice, hookIsActive, STATE_VAR } from "../state.ts";
-
-function tilde(path: string, home = homedir()): string {
-  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
-}
 
 function sortRules(rules: readonly Rule[]): Rule[] {
   return [...rules].sort((a, b) => a.dir.localeCompare(b.dir) || a.name.localeCompare(b.name));
@@ -119,6 +114,14 @@ export function cmdStatus(argv: readonly string[], ctx: Context): number {
   ctx.out(`rules file: ${tilde(ctx.rulesPath)}\n`);
   ctx.out(`hook:       ${ctx.env[STATE_VAR] ? "active in this shell" : "not active in this shell"}\n`);
 
+  // Worth its own line rather than leaving you to infer it from a column of "no":
+  // a pause is invisible otherwise, and it is the reason nothing is set.
+  const pausedAt = state.paused !== null && dirCovers(state.paused, pwd) ? state.paused : null;
+  if (pausedAt !== null) {
+    ctx.out(`paused:     yes — off in this shell since ${tilde(pausedAt)}\n`);
+    ctx.out(`            back on when you leave it, or now with: slopenv on\n`);
+  }
+
   if (active.size === 0) {
     ctx.out(`\nno rules apply here\n`);
     return 0;
@@ -164,6 +167,11 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
   ctx.out(`shell hook\n`);
   if (ctx.env[STATE_VAR]) ok("hook is active in this shell");
   else bad(`hook is not active in this shell — add  eval "$(slopenv hook zsh)"  to ~/.zshrc`);
+
+  // Not a problem — a state you asked for. But it is the first thing to rule out
+  // when the answer to "why is nothing set" is "because you turned it off".
+  const paused = decodeState(ctx.env[STATE_VAR]).paused;
+  if (paused !== null) note(`off in this shell since ${tilde(paused)} — \`slopenv on\` to load again`);
 
   ctx.out(`\nrules file (${tilde(ctx.rulesPath)})\n`);
   if (!existsSync(ctx.rulesPath)) {

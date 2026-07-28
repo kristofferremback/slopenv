@@ -46,8 +46,8 @@ function slopenv(args: string[]): void {
   if (proc.exitCode !== 0) throw new Error(`slopenv ${args.join(" ")} failed: ${proc.stderr.toString()}`);
 }
 
-/** Run a zsh script with the hook sourced, and return its stdout. */
-function zsh(script: string): string {
+/** Run a zsh script with the hook sourced, and return both streams. */
+function zshRun(script: string): { stdout: string; stderr: string } {
   const proc = Bun.spawnSync(["/bin/zsh", "-f", "-c", `source ${shellQuote(hookPath)}\n${script}`], {
     env: { ...process.env, SLOPENV_CONFIG: rulesPath, HOME: root },
     cwd: outsideDir,
@@ -57,7 +57,12 @@ function zsh(script: string): string {
   if (proc.exitCode !== 0) {
     throw new Error(`zsh exited ${proc.exitCode}\nstdout: ${proc.stdout.toString()}\nstderr: ${proc.stderr.toString()}`);
   }
-  return proc.stdout.toString();
+  return { stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+}
+
+/** The common case: only what the script printed. */
+function zsh(script: string): string {
+  return zshRun(script).stdout;
 }
 
 beforeAll(() => {
@@ -178,6 +183,111 @@ describe("zsh hook", () => {
     expect(output).toContain(`nasty:[${nasty}]`);
     // The `$(touch ...)` inside the value must never have run.
     expect(existsSync(join(root, "pwned"))).toBe(false);
+  });
+});
+
+describe("off and on, in a live shell", () => {
+  test("off unloads here, and leaving the directory loads again", () => {
+    const { stdout, stderr } = zshRun(`
+      unset NODE_ENV
+      cd ${shellQuote(workDir)}
+      print "in:[$TOKEN][$NODE_ENV]"
+      slopenv off
+      print "off:[$TOKEN][$NODE_ENV]"
+      cd ${shellQuote(appsDir)}
+      print "deeper:[$TOKEN][$PORT]"
+      cd ${shellQuote(outsideDir)}
+      print "outside:[$TOKEN]"
+      cd ${shellQuote(workDir)}
+      print "back:[$TOKEN][$NODE_ENV]"
+    `);
+
+    expect(stdout).toContain("in:[work-token][development]");
+    expect(stdout).toContain("off:[][]");
+    // Still off further in, including a rule that only applies down there.
+    expect(stdout).toContain("deeper:[][]");
+    expect(stdout).toContain("outside:[]");
+    expect(stdout).toContain("back:[work-token][development]");
+
+    expect(stderr).toMatch(/off in this shell — unloaded .*NODE_ENV.*TOKEN/);
+    expect(stderr).toContain("env vars are on again");
+  });
+
+  test("on loads again without leaving", () => {
+    const { stdout, stderr } = zshRun(`
+      cd ${shellQuote(workDir)}
+      slopenv off
+      print "off:[$TOKEN]"
+      slopenv on
+      print "on:[$TOKEN]"
+    `);
+    expect(stdout).toContain("off:[]");
+    expect(stdout).toContain("on:[work-token]");
+    expect(stderr).toMatch(/on again — .*NODE_ENV.*TOKEN/);
+  });
+
+  test("a value the shell already had comes back while off, not an empty one", () => {
+    const stdout = zsh(`
+      export TOKEN='from-my-zshrc'
+      cd ${shellQuote(workDir)}
+      print "in:[$TOKEN]"
+      slopenv off
+      print "off:[$TOKEN]"
+      slopenv on
+      print "on:[$TOKEN]"
+    `);
+    expect(stdout).toContain("in:[work-token]");
+    expect(stdout).toContain("off:[from-my-zshrc]");
+    expect(stdout).toContain("on:[work-token]");
+  });
+
+  test("the wrapper passes every other command straight through", () => {
+    const stdout = zsh(`
+      cd ${shellQuote(workDir)}
+      slopenv list --names
+      slopenv --version
+    `);
+    expect(stdout).toContain("NODE_ENV");
+    expect(stdout).toContain("TOKEN");
+    expect(stdout).toMatch(/\d+\.\d+\.\d+/);
+  });
+
+  test("a pause outlives its own rule being removed elsewhere, and still ends on the way out", () => {
+    // The hook only calls slopenv when the rules file or the set of covering rule
+    // directories changes. Removing the paused directory's rule takes it out of
+    // that set, so leaving would stop looking like a change — and the pause would
+    // silently follow you around. `_slopenv_hook` below stands in for the prompt
+    // that consumes the rules-file change, so the `cd` has nothing left to notice.
+    const scratch = join(root, "dev", "scratch");
+    mkdirSync(scratch, { recursive: true });
+    slopenv(["set", "SCRATCH_VAR=here", scratch]);
+
+    const { stdout, stderr } = zshRun(`
+      cd ${shellQuote(scratch)}
+      print "in:[$SCRATCH_VAR]"
+      slopenv off
+      slopenv rm SCRATCH_VAR ${shellQuote(scratch)} >/dev/null
+      _slopenv_hook
+      print "rule-gone:[$SCRATCH_VAR]"
+      cd ${shellQuote(outsideDir)}
+      print "out:[$SCRATCH_VAR]"
+    `);
+
+    expect(stdout).toContain("in:[here]");
+    expect(stdout).toContain("rule-gone:[]");
+    expect(stdout).toContain("out:[]");
+    expect(stderr).toContain("env vars are on again");
+  });
+
+  test("the pause does not leak into another shell", () => {
+    const stdout = zsh(`
+      cd ${shellQuote(workDir)}
+      slopenv off
+      print "here:[$TOKEN]"
+      env -u SLOPENV_STATE -u SLOPENV_FP -u SLOPENV_MATCH /bin/zsh -f -c 'source ${hookPath} >/dev/null 2>&1; cd ${workDir}; print "fresh:[$TOKEN]"'
+    `);
+    expect(stdout).toContain("here:[]");
+    expect(stdout).toContain("fresh:[work-token]");
   });
 });
 

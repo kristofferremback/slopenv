@@ -1,6 +1,6 @@
 {
   "name": "slopenv",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "direnv, but the config lives outside the repo and secrets live in the OS keychain",
   "type": "module",
   "private": true,

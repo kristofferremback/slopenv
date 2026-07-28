@@ -1,5 +1,6 @@
 import type { RuleSource } from "./rules.ts";
 import { debug } from "./log.ts";
+import { tilde } from "./paths.ts";
 
 export const STATE_VAR = "SLOPENV_STATE";
 export const STATE_VERSION = 1;
@@ -20,6 +21,17 @@ export interface State {
   /** Fingerprint of the rules file when this state was computed. */
   rev: string;
   active: Record<string, ActiveEntry>;
+  /**
+   * Set by `slopenv off`: the directory the pause is pinned to, or null when
+   * nothing is paused. While $PWD is inside it, nothing is injected; stepping
+   * outside it ends the pause.
+   *
+   * Deliberately *not* a new state version. An older slopenv reading this ignores
+   * the field and re-injects, which is the same thing it would do if the version
+   * bump made it discard the state — except it also keeps every `prev`, so a
+   * mid-session downgrade cannot lose the values it has to restore on leave.
+   */
+  paused: string | null;
 }
 
 /**
@@ -43,8 +55,17 @@ export function hookInactiveNotice(): string {
   );
 }
 
+/**
+ * Said on the way out of a paused directory. The point is that you asked for
+ * something temporary and got it: nothing you have to remember to undo, and no
+ * silent reversal either — you are told the moment it stops applying.
+ */
+export function pauseEndedNotice(dir: string): string {
+  return `slopenv: env vars are on again — the pause ended when you left ${tilde(dir)}.\n`;
+}
+
 export function emptyState(): State {
-  return { v: STATE_VERSION, rev: "", active: {} };
+  return { v: STATE_VERSION, rev: "", active: {}, paused: null };
 }
 
 /**
@@ -84,7 +105,12 @@ export function decodeState(encoded: string | undefined): State {
       active[name] = { prev, dir, src };
     }
 
-    return { v: STATE_VERSION, rev: typeof obj.rev === "string" ? obj.rev : "", active };
+    return {
+      v: STATE_VERSION,
+      rev: typeof obj.rev === "string" ? obj.rev : "",
+      active,
+      paused: typeof obj.paused === "string" && obj.paused !== "" ? obj.paused : null,
+    };
   } catch (err) {
     debug(`discarding unreadable ${STATE_VAR}: ${(err as Error).message}`);
     return emptyState();

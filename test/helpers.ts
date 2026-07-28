@@ -21,7 +21,12 @@ export interface Harness {
   reset(): void;
 }
 
-export function harness(options: { rulesPath: string; cwd: string; env?: NodeJS.ProcessEnv }): Harness {
+export function harness(options: {
+  rulesPath: string;
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  stdoutIsTty?: boolean;
+}): Harness {
   let out = "";
   let err = "";
   const store = new MemorySecretStore();
@@ -29,6 +34,9 @@ export function harness(options: { rulesPath: string; cwd: string; env?: NodeJS.
     rulesPath: options.rulesPath,
     cwd: options.cwd,
     env: options.env ?? {},
+    // A test always captures stdout, so the default has to be false — otherwise
+    // running the suite in a terminal and running it in CI test different code.
+    stdoutIsTty: options.stdoutIsTty ?? false,
     store,
     out: (text) => {
       out += text;
@@ -47,6 +55,39 @@ export function harness(options: { rulesPath: string; cwd: string; env?: NodeJS.
       err = "";
     },
   };
+}
+
+/**
+ * Split an emitted script into statements the way a shell parses it: on newlines
+ * that are not inside single quotes. SLOPENV_DIRS and SLOPENV_MATCH both hold
+ * newline-separated lists, so splitting on "\n" would tear them in half.
+ */
+export function splitStatements(script: string): string[] {
+  const statements: string[] = [];
+  let current = "";
+  let inQuote = false;
+
+  for (let i = 0; i < script.length; i++) {
+    const char = script[i] as string;
+    if (!inQuote && char === "\\") {
+      current += char + (script[i + 1] ?? "");
+      i++;
+      continue;
+    }
+    if (char === "'") {
+      inQuote = !inQuote;
+      current += char;
+      continue;
+    }
+    if (char === "\n" && !inQuote) {
+      if (current !== "") statements.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  if (current !== "") statements.push(current);
+  return statements;
 }
 
 /**

@@ -30,6 +30,11 @@ export function legacyRulesFilePath(env: NodeJS.ProcessEnv = process.env): strin
   return join(base, "slopenv", "rules.json");
 }
 
+/** `/Users/you/dev` -> `~/dev`, for anything a human reads. */
+export function tilde(path: string, home = homedir()): string {
+  return path === home || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path;
+}
+
 /**
  * Strip a trailing slash so `/a/b/` and `/a/b` are the same rule. Root stays `/`.
  */

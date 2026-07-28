@@ -9,6 +9,7 @@ import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
 import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
 import { cmdLink, cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+import { cmdOff, cmdOn } from "./commands/session.ts";
 import { cmdUpdate } from "./commands/update.ts";
 import { VERSION } from "./version.ts";
 
@@ -25,6 +26,9 @@ usage: slopenv <command> [args]
   link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
                                   another directory, without copying it
   rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
+  off                             unload slopenv's variables in this shell only,
+                                  until you \`slopenv on\` or leave the directory
+  on                              load them again without waiting to leave
   list                            show every rule (secret values are masked)
   status [DIR]                    show what applies in a directory and which rule wins
   doctor                          check the hook, the rules file and the keychain
@@ -51,12 +55,16 @@ examples:
   slopenv set "FULL_NAME=Kristoffer Remback"     # quote values containing spaces
   slopenv set FULL_NAME="Kristoffer Remback"     # equivalent — your shell does the work
   slopenv link GITHUB_TOKEN --from ~/dev/oss     # same value, one more directory
+  slopenv off                                    # this shell only, ends when you leave
 
 DIR covers itself and everything under it. When two rules define the same
 variable, the deeper directory wins.
 
 \`link\` borrows rather than copies: the value stays in one place, so changing it
 there changes it everywhere it is linked.
+
+\`off\` changes no rules and no other terminal. It ends when you \`slopenv on\` or
+when you leave the directory it was pinned to, which it tells you about.
 
 environment:
   SLOPENV_CONFIG   path to the rules file (default ~/.slopenv/rules.json)
@@ -70,6 +78,8 @@ const COMMANDS: Record<string, CommandFn> = {
   set: cmdSet,
   link: cmdLink,
   rm: cmdRm,
+  off: cmdOff,
+  on: cmdOn,
   list: cmdList,
   status: cmdStatus,
   doctor: cmdDoctor,
