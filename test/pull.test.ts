@@ -404,6 +404,51 @@ describe("the rules file", () => {
   });
 });
 
+describe("advice is pinned to what op actually says", () => {
+  /**
+   * Verbatim from `op` 2.35, collected by pointing the real binary at references
+   * that do not resolve. Guessed-at strings are how a hint ends up firing on the
+   * wrong failure and sending someone off in the wrong direction.
+   */
+  const REAL_ERRORS: [string, RegExp][] = [
+    [
+      `[ERROR] 2026/07/28 14:36:07 could not read secret 'op://Employee/NoSuchItem/Username': could not get item Employee/NoSuchItem: "NoSuchItem" isn't an item in the "Employee" vault. Specify the item with its UUID, name, or domain.`,
+      /op item list/,
+    ],
+    [
+      `[ERROR] 2026/07/28 14:36:08 could not read secret 'op://NoSuchVault/Notion/Username': could not get item NoSuchVault/Notion: "NoSuchVault" isn't a vault in this account. Specify the vault with its ID or name.`,
+      /op vault list/,
+    ],
+    [
+      `[ERROR] 2026/07/28 14:35:57 could not read secret 'op://Employee/Notion/NoSuchField': item 'Employee/Notion' does not have a field 'NoSuchField'`,
+      /the item is there but the field is not/,
+    ],
+    [
+      `[ERROR] 2026/07/28 14:36:08 could not read secret 'op://Employee/Notion': invalid secret reference 'op://Employee/Notion': too few '/': secret references should have at least vault, item and field specified`,
+      /op:\/\/VAULT\/ITEM\/FIELD/,
+    ],
+  ];
+
+  test("each real failure gets the advice that fits it", () => {
+    const engine = engineForRef("op://a/b/c");
+    for (const [stderr, expected] of REAL_ERRORS) {
+      expect(engine.hint(stderr)).toMatch(expected);
+    }
+  });
+
+  test("an unfamiliar failure gets no invented advice", () => {
+    const engine = engineForRef("op://a/b/c");
+    expect(engine.hint("[ERROR] something nobody has seen before")).toBeNull();
+  });
+
+  test("the failure and the advice both reach the user", () => {
+    fakeOp(`echo "item 'Employee/Notion' does not have a field 'Nope'" >&2; exit 1`);
+    expect(() => cli("pull", "TOKEN", "--ref", "op://Employee/Notion/Nope")).toThrow(
+      /does not have a field[\s\S]*the item is there but the field is not/,
+    );
+  });
+});
+
 describe("small parts", () => {
   test("references map to engines by scheme", () => {
     expect(engineForRef("op://a/b/c").id).toBe("1password");

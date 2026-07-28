@@ -59,6 +59,18 @@ const ONEPASSWORD: VaultEngine = {
     if (text.includes("authorization") && (text.includes("cancel") || text.includes("dismiss"))) {
       return `the 1Password approval prompt was dismissed — run the same command again to retry.`;
     }
+
+    // These four are quoted from `op` 2.35 rather than guessed at, and pinned by
+    // a test, because a hint that fires on the wrong failure is worse than none.
+    if (text.includes("invalid secret reference")) {
+      return `a reference needs all three parts:  op://VAULT/ITEM/FIELD`;
+    }
+    if (text.includes("does not have a field")) {
+      return `the item is there but the field is not. \`op item get "ITEM" --format json\` lists its fields.`;
+    }
+    if (text.includes("isn't a vault")) {
+      return `\`op vault list\` shows the vaults this account can see.`;
+    }
     if (text.includes("isn't an item") || text.includes("doesn't exist") || text.includes("not found")) {
       return `check the reference. \`op item list\` shows what you have, and the item's ⌄ menu has "Copy Secret Reference".`;
     }
