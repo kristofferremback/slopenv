@@ -19,7 +19,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["set-secret", "store a secret in the keychain and add a rule"],
   ["set", "add a plain-text rule for a non-secret value"],
   ["link", "apply a value you already have elsewhere to another directory"],
-  ["pull", "fetch a value from 1Password and cache it in the keychain"],
+  ["pull", "fetch a value from 1Password and keep it in the keychain"],
   ["rm", "remove a rule, and its keychain entry if it had one"],
   ["off", "unload the variables in this shell only, until you leave or turn it on"],
   ["on", "load them again after turning them off"],
@@ -97,6 +97,9 @@ ${described}
             '--ttl[how long before a cached value is called overdue]:duration:(1h 12h 1d 7d 30d 90d)' \\
             '--engine[which vault resolves the reference]:engine:(1password)' \\
             '--all[re-fetch every reference you have]' \\
+            '(--secret)--plain[keep the value in the rules file, in the clear]' \\
+            '(--plain)--secret[move the value back into the keychain]' \\
+            '(-y --yes -f --force)'{-y,--yes,-f,--force}'[skip the plain-text confirmation]' \\
             '1:variable:_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'
           ;;
@@ -177,7 +180,7 @@ _slopenv() {
         elif [ "\$command" = rm ]; then
           COMPREPLY+=( \$(compgen -W "--force" -- "\$cur") )
         elif [ "\$command" = pull ]; then
-          COMPREPLY+=( \$(compgen -W "--ref --ttl --all --engine" -- "\$cur") )
+          COMPREPLY+=( \$(compgen -W "--ref --ttl --all --engine --plain --secret" -- "\$cur") )
         fi
       fi
       ;;

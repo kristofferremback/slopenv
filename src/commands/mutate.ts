@@ -13,6 +13,7 @@ import {
   removeRule,
   RISKY_NAMES,
   ruleKey,
+  usesKeychain,
   updateRules,
   upsertRule,
   type Rule,
@@ -173,14 +174,7 @@ function warnIfBrokeLink(ctx: Context, replaced: Rule | undefined): void {
   }
 }
 
-/**
- * `keychain` and `vault` rules both keep their value in the keychain, so replacing
- * either with something that does not must clear it. A secret left behind after
- * its rule is gone is exactly the litter this tool exists to avoid.
- */
-function holdsAKeychainValue(rule: Rule | undefined): boolean {
-  return rule?.source === "keychain" || rule?.source === "vault";
-}
+
 
 function warnIfRisky(ctx: Context, name: string): void {
   if (RISKY_NAMES.has(name)) {
@@ -292,7 +286,7 @@ export function cmdSet(argv: readonly string[], ctx: Context): number {
   });
 
   // A plain rule replacing a secret must not leave the secret behind in the keychain.
-  if (holdsAKeychainValue(replaced)) {
+  if (usesKeychain(replaced)) {
     try {
       ctx.secretStore().remove(resolved.dir, resolved.name);
       ctx.err(`slopenv: replaced a keychain rule — deleted the keychain entry for ${resolved.name}\n`);
@@ -387,7 +381,7 @@ export function cmdLink(argv: readonly string[], ctx: Context): number {
 
   // Same rule as `set`: a rule that stops holding its own value must not leave a
   // secret behind in the keychain.
-  if (holdsAKeychainValue(replaced)) {
+  if (usesKeychain(replaced)) {
     try {
       ctx.secretStore().remove(dir, name);
       ctx.err(`slopenv: replaced a keychain rule — deleted the keychain entry for ${name}\n`);
@@ -441,7 +435,7 @@ export function cmdRm(argv: readonly string[], ctx: Context): number {
   if (!removed) fail(`no rule for ${name} in ${dir}`);
 
   const alsoRemoved = cascaded.length === 0 ? "" : `, and ${cascaded.length} link${cascaded.length === 1 ? "" : "s"} to it`;
-  if (holdsAKeychainValue(removed)) {
+  if (usesKeychain(removed)) {
     ctx.secretStore().remove(dir, name);
     const what = removed.source === "vault" ? "its cached value" : "its keychain entry";
     ctx.out(`removed ${name} (${dir}) and ${what}${alsoRemoved}\n`);

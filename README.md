@@ -170,6 +170,31 @@ slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token" --ttl 30d
 
 Past that window, entering the directory still exports the cached value and adds one line on stderr saying it is overdue and how to refresh it. It never blocks your prompt on the network: an old token plus a warning beats both a frozen terminal and a variable that is silently unset.
 
+#### Not everything in a vault is a secret
+
+An email address, a username, an account ID — putting those in the keychain is overkill, and `list` showing you `•••.com` is worse than useless. `--plain` keeps the value in the rules file instead:
+
+```
+$ slopenv pull NOTION_USER --ref "op://Employee/Notion/Username" --plain
+NOTION_USER = kristoffer@example.com  [vault]  /Users/you/dev/telness
+  pulled from op://Employee/Notion/Username
+  kept in /Users/you/.slopenv/rules.json, in the clear
+```
+
+It is still a vault rule — `pull --all` refreshes it with everything else, and the reference stays the source of truth. The only difference is where the value ends up, and it is shown in full everywhere, because masking a value that is sitting in a file in the clear would only pretend to a secrecy it does not have.
+
+The keychain remains the default, because a value coming out of a secret manager is a secret until you say otherwise. `--plain` runs the same credential check `set` does and refuses anything that looks like a token:
+
+```
+$ slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token" --plain
+slopenv: GITHUB_TOKEN: that looks like a credential, going by its name.
+  --plain writes it to /Users/you/.slopenv/rules.json in plain text.
+  Without --plain it goes to the keychain instead, and `list` shows only the last four characters.
+  Write it to the rules file anyway? [y/N]
+```
+
+`--secret` moves one back, and takes the plain-text copy with it. Moving in the other direction deletes the keychain entry, so a value only ever exists in one place.
+
 #### A reference, not a command
 
 There is no way to store a command for slopenv to run. The rule holds an engine name and the vault's own reference string, and slopenv builds the argument list itself from a table in the source — no shell, no interpolation, and the reference is passed as a single `argv` element however many quotes and dollar signs it contains. A rules file cannot ask slopenv to execute something of its choosing.
@@ -255,6 +280,7 @@ The candidates come from `slopenv list --names` and `slopenv list --dirs`, which
 | `slopenv set NAME VALUE DIR` | three-positional form, also accepted |
 | `slopenv link NAME --from SRCDIR [DIR]` | borrow the value that is already registered in `SRCDIR` |
 | `slopenv pull NAME --ref REF [DIR]` | fetch from a vault and cache it; `--ttl 30d` sets a refresh window |
+| `--plain` / `--secret` on `pull` | keep the value in the rules file rather than the keychain, or move it back |
 | `--dir DIR` / `--value VALUE` | for anything that would otherwise be misread |
 | `--yes` / `-y` (or `--force` / `-f`) | skip the credential confirmation described below |
 | `--force` / `-f` on `rm` | also remove the rules that link to the one being removed |
@@ -334,7 +360,7 @@ A link takes part in this like any other rule. It is matched by its own director
 
 Nothing is ever written inside your project. There is no `.envrc` equivalent, so there is nothing to `.gitignore` and nothing to leak in a commit.
 
-`rules.json` carries a version, and the file only claims the version it actually needs: 2 once it contains a link, 3 once it contains a vault reference, 1 otherwise. A file without either stays readable by an older slopenv; one with them tells an older build to update rather than complaining about a rule shape it does not know.
+`rules.json` carries a version, and the file only claims the version it actually needs: 2 once it contains a link, 3 once it contains a vault reference, 4 once one of those keeps its value in the file, 1 otherwise. A file without either stays readable by an older slopenv; one with them tells an older build to update rather than complaining about a rule shape it does not know.
 
 ## Security notes
 

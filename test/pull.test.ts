@@ -331,6 +331,139 @@ describe("pull --all overlaps the waiting", () => {
   });
 });
 
+describe("pull --plain: values that are not secrets", () => {
+  test("keeps the value in the rules file, in the clear, and out of the keychain", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    expect(await cli("pull", "NOTION_USER", "--ref", "op://Employee/Notion/Username", "--plain")).toBe(0);
+
+    const rule = loadRules(rulesPath).rules[0] as Rule;
+    expect(rule.source).toBe("vault");
+    expect(rule.store).toBe("file");
+    expect(rule.value).toBe("kristoffer@example.com");
+    expect(rule.ref).toBe("op://Employee/Notion/Username");
+    expect(h.store.get(work, "NOTION_USER")).toBeNull();
+
+    // Shown in full: masking a value that is sitting in a file in the clear would
+    // only pretend to a secrecy it does not have.
+    expect(h.stdout()).toContain("kristoffer@example.com");
+    expect(h.stdout()).not.toContain("•••");
+  });
+
+  test("the hot path exports it without touching the keychain", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+    writeFileSync(callLog, "");
+
+    expect(await cli("export", work)).toBe(0);
+    expect(h.stdout()).toContain(`export NOTION_USER='kristoffer@example.com'`);
+    expect(calls()).toEqual([]);
+  });
+
+  test("the keychain is still the default", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect((loadRules(rulesPath).rules[0] as Rule).store).toBeUndefined();
+    expect(h.store.get(work, "TOKEN")).toBe("sk-from-1password");
+  });
+
+  test("re-pulling keeps it where you put it", async () => {
+    fakeOp(`printf 'first@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+
+    fakeOp(`printf 'second@example.com\\n'`);
+    expect(await cli("pull", "NOTION_USER")).toBe(0);
+
+    const rule = loadRules(rulesPath).rules[0] as Rule;
+    expect(rule.store).toBe("file");
+    expect(rule.value).toBe("second@example.com");
+    expect(h.store.get(work, "NOTION_USER")).toBeNull();
+  });
+
+  test("--secret moves it back, and takes the plain-text copy with it", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+    expect(await cli("pull", "NOTION_USER", "--secret")).toBe(0);
+
+    const rule = loadRules(rulesPath).rules[0] as Rule;
+    expect(rule.store).toBeUndefined();
+    expect(rule.value).toBeUndefined();
+    expect(h.store.get(work, "NOTION_USER")).toBe("kristoffer@example.com");
+  });
+
+  test("--plain over a keychain-stored one deletes the keychain entry", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect(h.store.get(work, "TOKEN")).toBe("sk-from-1password");
+
+    expect(await cli("pull", "TOKEN", "--plain", "--yes")).toBe(0);
+    // Not left behind: that is how a keychain fills with orphans.
+    expect(h.store.get(work, "TOKEN")).toBeNull();
+    expect((loadRules(rulesPath).rules[0] as Rule).value).toBe("sk-from-1password");
+  });
+
+  test("refuses to write something that looks like a credential", async () => {
+    fakeOp(`printf 'sk-ant-oat01-abcdefghijklmnop\\n'`);
+    await expect(cli("pull", "TOKEN", "--ref", "op://a/b/c", "--plain")).rejects.toThrow(
+      /refusing to write what looks like a credential/,
+    );
+    expect(loadRules(rulesPath).rules).toEqual([]);
+    expect(h.store.get(work, "TOKEN")).toBeNull();
+    expect(h.stderr()).toContain("--plain writes it to");
+  });
+
+  test("--yes overrides that, since it is a guard rail and not a wall", async () => {
+    fakeOp(`printf 'sk-ant-oat01-abcdefghijklmnop\\n'`);
+    expect(await cli("pull", "TOKEN", "--ref", "op://a/b/c", "--plain", "--yes")).toBe(0);
+    expect((loadRules(rulesPath).rules[0] as Rule).value).toBe("sk-ant-oat01-abcdefghijklmnop");
+  });
+
+  test("doctor still calls that out, and says how to undo it", async () => {
+    fakeOp(`printf 'sk-ant-oat01-abcdefghijklmnop\\n'`);
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c", "--plain", "--yes");
+
+    expect(await cli("doctor")).toBe(1);
+    expect(h.stdout()).toContain("stored in plain text");
+    expect(h.stdout()).toContain("slopenv pull TOKEN --secret");
+  });
+
+  test("--plain and --secret together are refused, and neither works with --all", async () => {
+    await expect(cli("pull", "T", "--ref", "op://a/b/c", "--plain", "--secret")).rejects.toThrow(/opposites/);
+    await expect(cli("pull", "--all", "--plain")).rejects.toThrow(/one reference at a time/);
+  });
+
+  test("--all keeps each reference where it already lives", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+    fakeOp(`printf 'sk-from-1password\\n'`);
+    await cli("pull", "TOKEN", apps, "--ref", "op://d/e/f");
+
+    fakeOp(`printf 'refreshed\\n'`);
+    expect(await cli("pull", "--all")).toBe(0);
+
+    const rules = loadRules(rulesPath).rules;
+    expect(rules.find((r) => r.name === "NOTION_USER")?.value).toBe("refreshed");
+    expect(rules.find((r) => r.name === "TOKEN")?.value).toBeUndefined();
+    expect(h.store.get(work, "NOTION_USER")).toBeNull();
+    expect(h.store.get(apps, "TOKEN")).toBe("refreshed");
+  });
+
+  test("list shows it in full while a keychain-stored one stays masked", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+    fakeOp(`printf 'sk-from-1password\\n'`);
+    await cli("pull", "TOKEN", apps, "--ref", "op://d/e/f");
+
+    await cli("list");
+    expect(h.stdout()).toContain("kristoffer@example.com");
+    expect(h.stdout()).toContain("•••word");
+  });
+
+  test("rm takes the plain-text value with the rule", async () => {
+    fakeOp(`printf 'kristoffer@example.com\\n'`);
+    await cli("pull", "NOTION_USER", "--ref", "op://a/b/c", "--plain");
+    expect(await cli("rm", "NOTION_USER")).toBe(0);
+    expect(loadRules(rulesPath).rules).toEqual([]);
+  });
+});
+
 describe("the hot path never talks to the vault", () => {
   test("export reads the cached value and spawns nothing", async () => {
     await cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
@@ -456,7 +589,7 @@ describe("vault rules alongside everything else", () => {
     await cli("pull", "TOKEN", "--ref", "op://a/b/c");
     h.store.remove(work, "TOKEN");
     expect(await cli("doctor")).toBe(1);
-    expect(h.stdout()).toContain("nothing cached yet");
+    expect(h.stdout()).toContain("nothing stored yet");
   });
 });
 

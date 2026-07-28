@@ -4,7 +4,7 @@ import type { Context } from "../context.ts";
 import { dirCovers, resolveRules } from "../match.ts";
 import { resolvePwd, resolveRuleDir, tilde } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
-import { effectiveRule, loadRules, type Rule } from "../rules.ts";
+import { effectiveRule, holdsValueInFile, loadRules, type Rule } from "../rules.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
 import { decodeState, hookInactiveNotice, hookIsActive, STATE_VAR } from "../state.ts";
 import { describeAge, formatDuration } from "../duration.ts";
@@ -39,7 +39,9 @@ function table(rows: readonly string[][], out: (text: string) => void): void {
 function shownValue(ctx: Context, rules: readonly Rule[], rule: Rule): string {
   const holder = effectiveRule(rules, rule);
   if (!holder) return "<broken link>";
-  if (holder.source === "plain") return holder.value ?? "";
+  // Anything kept in the rules file is shown in full: it is already in the clear
+  // on disk, and masking it here would only pretend otherwise.
+  if (holdsValueInFile(holder)) return holder.value ?? "";
   try {
     const value = ctx.secretStore().get(holder.dir, holder.name);
     return value === null ? "<missing>" : maskSecret(value);
@@ -225,27 +227,32 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     for (const rule of sortRules(refs)) {
       const engine = engineById(rule.engine as string);
       const when = rule.fetched ? describeAge(rule.fetched, now) : "never";
-      // The cache is what the hot path actually reads, so its absence is the
-      // failure — an unreachable vault is not, until you next pull.
+      // The stored value is what the hot path actually reads, so its absence is
+      // the failure — an unreachable vault is not, until you next pull.
       let cached: string | null = null;
-      try {
-        cached = ctx.secretStore().get(rule.dir, rule.name);
-      } catch (err) {
-        bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
-        continue;
+      if (rule.store === "file") {
+        cached = rule.value ?? null;
+      } else {
+        try {
+          cached = ctx.secretStore().get(rule.dir, rule.name);
+        } catch (err) {
+          bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
+          continue;
+        }
       }
 
       if (!engine) {
         bad(`${rule.name} (${tilde(rule.dir)}): unknown engine ${JSON.stringify(rule.engine)} — hand-edited, or written by a newer slopenv`);
       } else if (cached === null) {
-        bad(`${rule.name} (${tilde(rule.dir)}): nothing cached yet — run \`slopenv pull ${rule.name} ${rule.dir}\``);
+        bad(`${rule.name} (${tilde(rule.dir)}): nothing stored yet — run \`slopenv pull ${rule.name} ${rule.dir}\``);
       } else if (rule.ttl !== undefined && rule.fetched !== undefined && now - Date.parse(rule.fetched) > rule.ttl * 1000) {
         note(
           `${rule.name} (${tilde(rule.dir)}): ${maskSecret(cached)} from ${rule.ref}, pulled ${when} — ` +
             `past its ${formatDuration(rule.ttl)} refresh window`,
         );
       } else {
-        ok(`${rule.name} (${tilde(rule.dir)}): ${maskSecret(cached)} from ${rule.ref}, pulled ${when}`);
+        const shown = rule.store === "file" ? `${cached} (in the rules file)` : maskSecret(cached);
+        ok(`${rule.name} (${tilde(rule.dir)}): ${shown} from ${rule.ref}, pulled ${when}`);
       }
 
       if (engine && !Bun.which(engine.binary, { PATH: ctx.env.PATH ?? "" })) {
@@ -257,7 +264,7 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
   // `set` asks before storing one of these, but `edit` and hand-editing bypass
   // that entirely — so check the file itself, not just the way in.
   const suspicious = rules
-    .filter((r) => r.source === "plain")
+    .filter((r) => holdsValueInFile(r))
     .map((r) => ({ rule: r, suspicion: detectSecretish(r.name, r.value ?? "") }))
     .filter((x) => x.suspicion !== null);
 
@@ -266,7 +273,7 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     for (const { rule, suspicion } of suspicious) {
       bad(
         `${describeSuspicion(rule.name, suspicion as NonNullable<typeof suspicion>)}, stored in plain text ` +
-          `(${tilde(rule.dir)}) — move it with: slopenv set-secret ${rule.name} ${rule.dir}`,
+          `(${tilde(rule.dir)}) — move it with: slopenv ${rule.source === "vault" ? `pull ${rule.name} --secret` : `set-secret ${rule.name}`} ${rule.dir}`,
       );
     }
   }

@@ -1,5 +1,5 @@
 import { dirCovers, resolveRules } from "./match.ts";
-import { effectiveRule, type Rule } from "./rules.ts";
+import { effectiveRule, holdsValueInFile, type Rule } from "./rules.ts";
 import { describeAge } from "./duration.ts";
 import type { SecretStore } from "./secrets/index.ts";
 import { exportStatement, unsetStatement } from "./shell.ts";
@@ -30,20 +30,6 @@ export interface Plan {
 }
 
 /**
- * Diff what should be active in `pwd` against what the shell says is active, and
- * emit only the difference.
- *
- * The state carries each active variable's winning rule directory and source, so
- * three distinct situations are told apart: nothing changed (emit nothing, and
- * crucially do not touch the keychain), the winning rule changed because a nested
- * directory overrides an ancestor (re-export), and the variable left scope
- * (restore whatever the shell had before slopenv, direnv-style).
- *
- * A pause (`slopenv off`) is a fourth situation, and it reuses the third: while it
- * holds nothing is desired, so everything active takes the ordinary leave-scope
- * path and the shell's own values come back. Leaving the paused directory ends it.
- */
-/**
  * A cached vault value that is past its refresh window.
  *
  * Deliberately a warning and not a refusal: the alternative is either blocking the
@@ -62,6 +48,20 @@ function pullOverdue(rule: Rule, now: number): string | null {
   );
 }
 
+/**
+ * Diff what should be active in `pwd` against what the shell says is active, and
+ * emit only the difference.
+ *
+ * The state carries each active variable's winning rule directory and source, so
+ * three distinct situations are told apart: nothing changed (emit nothing, and
+ * crucially do not touch the keychain), the winning rule changed because a nested
+ * directory overrides an ancestor (re-export), and the variable left scope
+ * (restore whatever the shell had before slopenv, direnv-style).
+ *
+ * A pause (`slopenv off`) is a fourth situation, and it reuses the third: while it
+ * holds nothing is desired, so everything active takes the ordinary leave-scope
+ * path and the shell's own values come back. Leaving the paused directory ends it.
+ */
 export function computePlan(input: PlanInput): Plan {
   const { rules, pwd, prevState, env, store, rev } = input;
   const now = input.now ?? Date.now();
@@ -102,8 +102,14 @@ export function computePlan(input: PlanInput): Plan {
     }
 
     let value: string | null;
-    if (holder.source === "plain") {
+    if (holdsValueInFile(holder)) {
+      // In the rules file: a plain rule, or a vault reference you told to keep its
+      // value in the open with `pull --plain`. Either way, no keychain round trip.
       value = holder.value ?? "";
+      if (holder.source === "vault") {
+        const overdue = pullOverdue(holder, now);
+        if (overdue !== null) warnings.push(overdue);
+      }
     } else {
       // A vault rule reads from the keychain like any other secret. The vault CLI
       // itself is never invoked here: it costs hundreds of milliseconds, needs the

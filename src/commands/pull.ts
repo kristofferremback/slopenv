@@ -4,7 +4,9 @@ import { formatDuration, parseDuration } from "../duration.ts";
 import { fail, SlopenvError } from "../errors.ts";
 import { resolveRuleDir, tilde } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
-import { loadRules, ruleKey, updateRules, upsertRule, type Rule } from "../rules.ts";
+import { loadRules, ruleKey, updateRules, upsertRule, usesKeychain, type Rule } from "../rules.ts";
+import { describeSuspicion, detectSecretish } from "../secretish.ts";
+import { confirm, isInteractive } from "../prompt.ts";
 import { hookInactiveNotice, hookIsActive } from "../state.ts";
 import { ENGINES, engineById, engineForRef, resolveMany, resolveRef, type VaultEngine } from "../vault/index.ts";
 
@@ -47,13 +49,31 @@ function engineFor(rule: Rule): VaultEngine {
 }
 
 /**
- * Put a resolved value in the keychain. Deliberately does not touch rules.json:
- * `--all` writes once at the end instead of once per secret, because every write
- * changes the file's fingerprint and makes every live shell re-resolve.
+ * Put a resolved value where its rule says it goes.
+ *
+ * The keychain write happens here; the rules.json write does not, because `--all`
+ * writes once at the end rather than once per secret — every write changes the
+ * file's fingerprint and makes every live shell re-resolve.
+ *
+ * A rule stored in the file therefore has nothing to do here except report what
+ * changed; `record` carries its value to disk.
  */
-function cache(ctx: Context, rule: Rule, value: string): { value: string; changed: boolean } {
+function cache(ctx: Context, rule: Rule, previousRule: Rule | undefined, value: string): { changed: boolean } {
+  // A rule that has stopped keeping its value in the keychain must not leave the
+  // old copy behind — that is how a keychain fills up with secrets whose rules
+  // are long gone.
+  if (usesKeychain(previousRule) && !usesKeychain(rule)) {
+    try {
+      ctx.secretStore().remove(rule.dir, rule.name);
+    } catch (err) {
+      ctx.err(`slopenv: could not delete the keychain entry for ${rule.name}: ${(err as Error).message}\n`);
+    }
+  }
+
+  if (!usesKeychain(rule)) return { changed: previousRule?.value !== value };
+
   // Read before writing so that "unchanged" is the truth rather than an assumption.
-  // A missing cache entry reads as a change, which is exactly right.
+  // A missing entry reads as a change, which is exactly right.
   let previous: string | null = null;
   try {
     previous = ctx.secretStore().get(rule.dir, rule.name);
@@ -62,7 +82,30 @@ function cache(ctx: Context, rule: Rule, value: string): { value: string; change
   }
 
   if (previous !== value) ctx.secretStore().set(rule.dir, rule.name, value);
-  return { value, changed: previous !== value };
+  return { changed: previous !== value };
+}
+
+/**
+ * Putting a value in rules.json is putting it on disk in the clear. Anything that
+ * looks like a credential has to be confirmed first — the same guard `set` uses,
+ * and for the same reason: this is a mistake you would not notice until it
+ * mattered. Non-interactive callers get a refusal rather than a hang.
+ */
+function confirmPlaintext(ctx: Context, rule: Rule, value: string, assumeYes: boolean): void {
+  if (assumeYes) return;
+  const suspicion = detectSecretish(rule.name, value);
+  if (!suspicion) return;
+
+  ctx.err(`slopenv: ${describeSuspicion(rule.name, suspicion)}.\n`);
+  ctx.err(`  --plain writes it to ${ctx.rulesPath} in plain text.\n`);
+  ctx.err(`  Without --plain it goes to the keychain instead, and \`list\` shows only the last four characters.\n`);
+
+  if (!isInteractive()) {
+    fail(`refusing to write what looks like a credential to the rules file. Pass --yes to override, or drop --plain.`);
+  }
+  if (!confirm("  Write it to the rules file anyway? [y/N] ")) {
+    fail("aborted — nothing was written");
+  }
 }
 
 /** Write the rules, stamping each pulled rule with when it was pulled. */
@@ -77,17 +120,30 @@ function record(ctx: Context, rules: readonly Rule[], now: Date): void {
 export async function cmdPull(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, {
     value: ["ref", "dir", "alias", "engine", "ttl"],
-    boolean: ["all"],
+    boolean: ["all", "plain", "secret", "yes", "force"],
+    short: { y: "yes", f: "force" },
   });
   const usage =
     `usage: slopenv pull NAME --ref "op://Vault/Item/field" [DIR] [--alias TEXT] [--ttl 30d]\n` +
     `       slopenv pull NAME [DIR]      re-fetch a reference you already have\n` +
-    `       slopenv pull --all           re-fetch every one of them`;
+    `       slopenv pull --all           re-fetch every one of them\n` +
+    `\nBy default the value goes to the keychain, because it came out of a secret\n` +
+    `manager. --plain keeps it in the rules file instead, in the clear, for the\n` +
+    `things in your vault that are not secrets. --secret moves one back.`;
 
   const now = new Date();
 
+  if (args.flags.has("plain") && args.flags.has("secret")) {
+    fail("--plain and --secret are opposites; pass one or neither");
+  }
+
   if (args.flags.has("all")) {
     if (args.positional.length > 0 || args.values.ref !== undefined) fail(usage);
+    // Where each value lives is a property of its own rule, and re-fetching is not
+    // the moment to change twenty of them at once.
+    if (args.flags.has("plain") || args.flags.has("secret")) {
+      fail("--plain and --secret apply to one reference at a time, not to --all");
+    }
     return await pullAll(ctx, now);
   }
 
@@ -112,6 +168,10 @@ export async function cmdPull(argv: readonly string[], ctx: Context): Promise<nu
   const engine = resolveEngine(ref, args.values.engine);
 
   const rule: Rule = { dir, name, source: "vault", ref, engine: engine.id };
+  // Absent flags keep whatever the rule already decided; a new rule defaults to
+  // the keychain, because the value is coming out of a secret manager.
+  const inFile = args.flags.has("plain") || (!args.flags.has("secret") && existing?.store === "file");
+  if (inFile) rule.store = "file";
   // Absent flags keep what the rule already had, so re-pulling is never a way to
   // quietly lose an alias or a refresh window. `--alias ""` still clears one.
   const alias = args.values.alias !== undefined ? args.values.alias || undefined : existing?.alias;
@@ -119,7 +179,12 @@ export async function cmdPull(argv: readonly string[], ctx: Context): Promise<nu
   const ttl = args.values.ttl !== undefined ? parseDuration(args.values.ttl) : existing?.ttl;
   if (ttl !== undefined) rule.ttl = ttl;
 
-  const { value, changed } = cache(ctx, rule, await resolveRef(engineFor(rule), ref, { env: ctx.env }));
+  const value = await resolveRef(engineFor(rule), ref, { env: ctx.env });
+  if (inFile) {
+    confirmPlaintext(ctx, rule, value, args.flags.has("yes") || args.flags.has("force"));
+    rule.value = value;
+  }
+  const { changed } = cache(ctx, rule, existing, value);
 
   try {
     record(ctx, [rule], now);
@@ -135,9 +200,12 @@ export async function cmdPull(argv: readonly string[], ctx: Context): Promise<nu
     ctx.err(`slopenv: this directory used to link to ${existing.target}; it now has a reference of its own\n`);
   }
 
-  ctx.out(`${name} = ${maskSecret(value)}  [vault]  ${dir}${rule.alias ? `  ${rule.alias}` : ""}\n`);
+  // Shown in full when it is stored in the open anyway; masking it there would
+  // only pretend to a secrecy the file does not have.
+  ctx.out(`${name} = ${inFile ? value : maskSecret(value)}  [vault]  ${dir}${rule.alias ? `  ${rule.alias}` : ""}\n`);
   ctx.out(`  ${changed ? "pulled from" : "unchanged, from"} ${ref}\n`);
   if (rule.ttl !== undefined) ctx.out(`  refresh window ${formatDuration(rule.ttl)}\n`);
+  if (inFile) ctx.out(`  kept in ${ctx.rulesPath}, in the clear\n`);
   if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
   return 0;
 }
@@ -193,9 +261,11 @@ async function pullAll(ctx: Context, now: Date): Promise<number> {
       continue;
     }
     try {
-      const { changed } = cache(ctx, rule, result.value);
-      pulled.push(rule);
-      ctx.out(`  ${changed ? "pulled   " : "unchanged"}  ${rule.name} (${tilde(rule.dir)})  ${maskSecret(result.value)}\n`);
+      const next: Rule = rule.store === "file" ? { ...rule, value: result.value } : rule;
+      const { changed } = cache(ctx, next, rule, result.value);
+      pulled.push(next);
+      const shown = rule.store === "file" ? result.value : maskSecret(result.value);
+      ctx.out(`  ${changed ? "pulled   " : "unchanged"}  ${rule.name} (${tilde(rule.dir)})  ${shown}\n`);
     } catch (err) {
       failed.push(rule);
       ctx.err(`slopenv: ${rule.name} (${tilde(rule.dir)}) — ${(err as Error).message}\n`);

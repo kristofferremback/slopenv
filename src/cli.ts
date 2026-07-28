@@ -27,7 +27,8 @@ usage: slopenv <command> [args]
   link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
                                   another directory, without copying it
   pull NAME --ref REF [DIR]       fetch a value from 1Password and cache it in the
-                                  keychain (\`pull --all\` re-fetches every one)
+                                  keychain (\`pull --all\` re-fetches every one;
+                                  \`--plain\` keeps it in the rules file instead)
   rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
   off                             unload slopenv's variables in this shell only,
                                   until you \`slopenv on\` or leave the directory
@@ -47,6 +48,8 @@ common flags:
   --from DIR      the directory \`link\` borrows a value from
   --ref REF       a secret reference, e.g. "op://Work/Claude Code/credential"
   --ttl 30d       how long before \`pull\` says a cached value is overdue
+  --plain         \`pull\`: keep the value in the rules file, not the keychain
+                  (\`--secret\` moves one back; the keychain is the default)
   --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
                   (--force / -f do the same thing; \`rm --force\` removes links too)
@@ -63,6 +66,7 @@ examples:
   slopenv off                                    # this shell only, ends when you leave
   slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token"
   slopenv pull --all                             # rebuild the keychain on a new machine
+  slopenv pull NOTION_USER --ref "op://Employee/Notion/Username" --plain
 
 DIR covers itself and everything under it. When two rules define the same
 variable, the deeper directory wins.
@@ -71,7 +75,9 @@ variable, the deeper directory wins.
 there changes it everywhere it is linked.
 
 \`pull\` keeps the reference in the rules file and the value in the keychain, so the
-vault is never consulted on a \`cd\` — only when you pull.
+vault is never consulted on a \`cd\` — only when you pull. Not everything in a
+vault is a secret, so \`--plain\` keeps the value in the rules file instead, in the
+clear, and asks first if it looks like a credential.
 
 \`off\` changes no rules and no other terminal. It ends when you \`slopenv on\` or
 when you leave the directory it was pinned to, which it tells you about.
