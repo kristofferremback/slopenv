@@ -16,8 +16,7 @@ import { fail } from "../errors.ts";
  */
 
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["set-secret", "store a secret in the keychain and add a rule"],
-  ["set", "add a plain-text rule for a non-secret value"],
+  ["set", "add a rule for a value (--secret keeps it in the keychain)"],
   ["link", "apply a value you already have elsewhere to another directory"],
   ["pull", "fetch a value from 1Password and keep it in the keychain"],
   ["rm", "remove a rule, and its keychain entry if it had one"],
@@ -72,11 +71,13 @@ ${described}
       ;;
     args)
       case \$words[1] in
-        set|set-secret)
+        set)
           _arguments \\
             '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
             '--value[value to store]:value:' \\
             '--alias[human label shown by list]:alias:' \\
+            '(--plain)--secret[keep the value in the keychain]' \\
+            '(--secret)--plain[keep the value in the rules file, in the clear]' \\
             '(-y --yes -f --force)'{-y,--yes,-f,--force}'[skip the credential confirmation]' \\
             '1:variable (NAME or NAME=VALUE):_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'
@@ -169,13 +170,15 @@ _slopenv() {
   esac
 
   case "\$command" in
-    set|set-secret|rm|link|pull)
+    set|rm|link|pull)
       if [ "\$COMP_CWORD" -eq 2 ]; then
         COMPREPLY=( \$(compgen -W "\$(command slopenv list --names 2>/dev/null)" -- "\$cur") )
       else
         COMPREPLY=( \$(compgen -W "\$(command slopenv list --dirs 2>/dev/null)" -- "\$cur") )
         COMPREPLY+=( \$(compgen -d -- "\$cur") )
-        if [ "\$command" = link ]; then
+        if [ "\$command" = set ]; then
+          COMPREPLY+=( \$(compgen -W "--secret --plain --alias --value" -- "\$cur") )
+        elif [ "\$command" = link ]; then
           COMPREPLY+=( \$(compgen -W "--from" -- "\$cur") )
         elif [ "\$command" = rm ]; then
           COMPREPLY+=( \$(compgen -W "--force" -- "\$cur") )

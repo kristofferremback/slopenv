@@ -474,7 +474,7 @@ describe("the hot path never talks to the vault", () => {
     expect(calls()).toEqual([]);
   });
 
-  test("a reference with no cached value yet points at pull, not set-secret", async () => {
+  test("a reference with no cached value yet points at pull, not set", async () => {
     const rule: Rule = { dir: work, name: "TOKEN", source: "vault", ref: "op://a/b/c", engine: "1password" };
     const plan = computePlan({
       rules: [rule],
@@ -564,9 +564,9 @@ describe("vault rules alongside everything else", () => {
     expect(h.stderr()).toContain("used to pull op://a/b/c");
   });
 
-  test("set-secret over a reference detaches it", async () => {
+  test("set --secret over a reference detaches it", async () => {
     await cli("pull", "TOKEN", "--ref", "op://a/b/c");
-    expect(await cli("set-secret", "TOKEN=typed-by-hand")).toBe(0);
+    expect(await cli("set", "--secret", "TOKEN=typed-by-hand")).toBe(0);
     expect(loadRules(rulesPath).rules[0]?.source).toBe("keychain");
     expect(loadRules(rulesPath).rules[0]?.ref).toBeUndefined();
     expect(h.store.get(work, "TOKEN")).toBe("typed-by-hand");

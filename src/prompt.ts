@@ -11,7 +11,7 @@ export interface ReadValueOptions {
  *
  * Reads from /dev/tty rather than stdin, so redirection can't feed us something
  * by accident — but if stdin is not a terminal we take the value from there
- * instead, which makes `cat token.txt | slopenv set-secret TOKEN` work.
+ * instead, which makes `cat token.txt | slopenv set --secret TOKEN` work.
  */
 export function readValue(promptText: string, options: ReadValueOptions): string {
   if (!process.stdin.isTTY) return trimTrailingNewlines(readAllStdin());

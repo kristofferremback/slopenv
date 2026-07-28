@@ -111,10 +111,10 @@ describe("forgetting to quote", () => {
     expect(result.stderr).toContain(`slopenv set "SENTENCE=the quick brown fox"`);
   });
 
-  test("set-secret gets the hint in its own name", () => {
-    const result = typed(`set-secret TOKEN=some value`);
+  test("the hint keeps --secret, so the suggested line still goes to the keychain", () => {
+    const result = typed(`set --secret TOKEN=some value`);
     expect(result.code).toBe(1);
-    expect(result.stderr).toContain("slopenv set-secret");
+    expect(result.stderr).toContain(`slopenv set --secret "TOKEN=some value"`);
   });
 
   test("the three-positional form gets the same hint", () => {

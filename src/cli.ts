@@ -8,7 +8,7 @@ import { cmdEdit } from "./commands/edit.ts";
 import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
 import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
-import { cmdLink, cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+import { cmdLink, cmdRm, cmdSet } from "./commands/mutate.ts";
 import { cmdPull } from "./commands/pull.ts";
 import { cmdOff, cmdOn } from "./commands/session.ts";
 import { cmdUpdate } from "./commands/update.ts";
@@ -20,10 +20,10 @@ const HELP = `slopenv ${VERSION} — directory-scoped environment variables, wit
 
 usage: slopenv <command> [args]
 
-  set-secret NAME[=VALUE] [DIR]   store a secret in the keychain and add a rule
+  set NAME[=VALUE] [DIR]          add a rule for a non-secret value, in the rules
+                                  file (asks first if it looks like a credential)
+  set --secret NAME[=VALUE] [DIR] store the value in the keychain instead
                                   (omit =VALUE to be prompted, hidden, off the record)
-  set NAME[=VALUE] [DIR]          add a plain-text rule for a non-secret value
-                                  (asks first if the value looks like a credential)
   link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
                                   another directory, without copying it
   pull NAME --ref REF [DIR]       fetch a value from 1Password and cache it in the
@@ -48,8 +48,9 @@ common flags:
   --from DIR      the directory \`link\` borrows a value from
   --ref REF       a secret reference, e.g. "op://Work/Claude Code/credential"
   --ttl 30d       how long before \`pull\` says a cached value is overdue
-  --plain         \`pull\`: keep the value in the rules file, not the keychain
-                  (\`--secret\` moves one back; the keychain is the default)
+  --plain         keep the value in the rules file, in the clear
+  --secret        keep it in the keychain instead
+                  (\`set\` defaults to --plain, \`pull\` to --secret)
   --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
                   (--force / -f do the same thing; \`rm --force\` removes links too)
@@ -57,9 +58,9 @@ common flags:
   --names/--dirs  plain one-per-line output (\`list\`), for scripts and completion
 
 examples:
-  slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
+  slopenv set --secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
   slopenv set NODE_ENV=development ./
-  slopenv set-secret GITHUB_TOKEN=ghp_xxx ~/dev/oss
+  slopenv set --secret GITHUB_TOKEN=ghp_xxx ~/dev/oss
   slopenv set "FULL_NAME=Kristoffer Remback"     # quote values containing spaces
   slopenv set FULL_NAME="Kristoffer Remback"     # equivalent — your shell does the work
   slopenv link GITHUB_TOKEN --from ~/dev/oss     # same value, one more directory
@@ -90,7 +91,6 @@ environment:
 type CommandFn = (argv: readonly string[], ctx: Context) => number | Promise<number>;
 
 const COMMANDS: Record<string, CommandFn> = {
-  "set-secret": cmdSetSecret,
   set: cmdSet,
   link: cmdLink,
   rm: cmdRm,
@@ -105,6 +105,11 @@ const COMMANDS: Record<string, CommandFn> = {
   completions: cmdCompletions,
   update: cmdUpdate,
   export: cmdExport,
+};
+
+/** Commands that were replaced, and what replaced them. */
+const RENAMED: Record<string, string> = {
+  "set-secret": "set --secret",
 };
 
 /**
@@ -139,6 +144,14 @@ export function run(argv: readonly string[], ctx: Context): number | Promise<num
 
   const fn = COMMANDS[command];
   if (!fn) {
+    // A command that used to exist deserves better than "unknown". The typing
+    // muscle memory is real, and so is the shell history it lives in.
+    const replacement = RENAMED[command];
+    if (replacement) {
+      ctx.err(`slopenv: \`${command}\` is now \`${replacement}\`.\n`);
+      ctx.err(`  Same behaviour, one spelling: the value goes to the keychain either way.\n`);
+      return 1;
+    }
     ctx.err(`slopenv: unknown command ${JSON.stringify(command)}\n`);
     ctx.err(`Run \`slopenv --help\` for usage.\n`);
     return 1;

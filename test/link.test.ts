@@ -45,7 +45,7 @@ function ruleFor(dir: string, name: string): Rule | undefined {
 
 describe("slopenv link", () => {
   test("adds a rule in the current directory that borrows from another one", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     expect(cli("link", "TOKEN", "--from", threa)).toBe(0);
 
     expect(ruleFor(web, "TOKEN")).toEqual({ dir: web, name: "TOKEN", source: "link", target: threa });
@@ -53,7 +53,7 @@ describe("slopenv link", () => {
   });
 
   test("the value is borrowed, not copied — the keychain gains no second entry", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
 
     expect([...h.store.entries.keys()]).toEqual([accountFor(threa, "TOKEN")]);
@@ -72,7 +72,7 @@ describe("slopenv link", () => {
   });
 
   test("--from takes any directory the source rule covers, and records the rule's own", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     // The rule lives in threa; apps merely inherits it.
     cli("link", "TOKEN", "--from", apps);
     expect(ruleFor(web, "TOKEN")?.target).toBe(threa);
@@ -81,7 +81,7 @@ describe("slopenv link", () => {
   test("linking to a link is flattened to the real rule, so links never chain", () => {
     const third = join(root, "threa-docs");
     mkdirSync(third);
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     // web is now a link; borrowing from it must land on threa, not on web.
     cli("link", "TOKEN", "--from", web, third);
@@ -110,7 +110,7 @@ describe("slopenv link", () => {
   });
 
   test("--alias labels the link; without one it shows the borrowed label", () => {
-    cli("set-secret", "TOKEN=s3cret", threa, "--alias", "Claude Code for work");
+    cli("set", "--secret", "TOKEN=s3cret", threa, "--alias", "Claude Code for work");
     cli("link", "TOKEN", "--from", threa);
     expect(ruleFor(web, "TOKEN")?.alias).toBeUndefined();
 
@@ -122,8 +122,8 @@ describe("slopenv link", () => {
   });
 
   test("replacing a keychain rule with a link deletes the orphaned keychain entry", () => {
-    cli("set-secret", "TOKEN=shared", threa);
-    cli("set-secret", "TOKEN=its-own", web);
+    cli("set", "--secret", "TOKEN=shared", threa);
+    cli("set", "--secret", "TOKEN=its-own", web);
     expect(h.store.entries.has(accountFor(web, "TOKEN"))).toBe(true);
 
     cli("link", "TOKEN", "--from", threa);
@@ -146,7 +146,7 @@ describe("slopenv link", () => {
 
 describe("a link in the shell", () => {
   test("exports the value the target holds", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     cli("export", web);
 
@@ -154,9 +154,9 @@ describe("a link in the shell", () => {
   });
 
   test("changing the value at the source changes it everywhere it is linked", () => {
-    cli("set-secret", "TOKEN=first", threa);
+    cli("set", "--secret", "TOKEN=first", threa);
     cli("link", "TOKEN", "--from", threa);
-    cli("set-secret", "TOKEN=second", threa);
+    cli("set", "--secret", "TOKEN=second", threa);
 
     cli("export", web);
     expect(h.stdout()).toContain("export TOKEN='second'");
@@ -214,7 +214,7 @@ describe("a link in the shell", () => {
   });
 
   test("a link to a secret that is gone from the keychain names the directory to fix", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     h.store.entries.clear();
 
@@ -226,7 +226,7 @@ describe("a link in the shell", () => {
 
 describe("removing a linked rule", () => {
   test("refuses while something links to it, and names what does", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
 
     expect(() => cli("rm", "TOKEN", threa)).toThrow(/1 rule links to TOKEN/);
@@ -236,7 +236,7 @@ describe("removing a linked rule", () => {
   });
 
   test("--force removes the rule and every link to it", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     cli("link", "TOKEN", "--from", threa, apps);
 
@@ -247,7 +247,7 @@ describe("removing a linked rule", () => {
   });
 
   test("removing the link leaves the value, and the keychain, alone", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
 
     expect(cli("rm", "TOKEN", web)).toBe(0);
@@ -349,7 +349,7 @@ describe("links in the rules file", () => {
 
 describe("links in the output", () => {
   test("list gains a BORROWS FROM column only when there is a link", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("list");
     expect(h.stdout()).not.toContain("BORROWS FROM");
 
@@ -371,7 +371,7 @@ describe("links in the output", () => {
   });
 
   test("doctor reports each link and what it resolves to", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     cli("doctor");
 
@@ -380,7 +380,7 @@ describe("links in the output", () => {
   });
 
   test("list --json carries the target, and still never carries the secret", () => {
-    cli("set-secret", "TOKEN=s3cret", threa);
+    cli("set", "--secret", "TOKEN=s3cret", threa);
     cli("link", "TOKEN", "--from", threa);
     cli("list", "--json");
 

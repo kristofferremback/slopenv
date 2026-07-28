@@ -23,7 +23,7 @@ import { hookInactiveNotice, hookIsActive } from "../state.ts";
 
 const MUTATE_SPEC = {
   value: ["dir", "value", "alias"],
-  boolean: ["yes", "force"],
+  boolean: ["yes", "force", "plain", "secret"],
   short: { y: "yes", f: "force" },
 } as const;
 
@@ -35,6 +35,8 @@ interface Resolved {
   aliasGiven: boolean;
   /** `--yes` / `-y` / `--force` / `-f`: skip the plain-text confirmation. */
   assumeYes: boolean;
+  /** `--secret`: keep the value in the keychain rather than in the rules file. */
+  secret: boolean;
 }
 
 /**
@@ -80,6 +82,10 @@ function resolveMutateArgs(argv: readonly string[], ctx: Context, usage: string,
   const args = parseArgs(argv, MUTATE_SPEC);
   const positional = args.positional;
 
+  // The quoting hint suggests a command line, so it has to be the one you typed —
+  // dropping `--secret` from the suggestion would send the value to the wrong place.
+  if (args.flags.has("secret")) command = `${command} --secret`;
+
   const head = positional[0];
   if (!head) fail(usage);
 
@@ -118,6 +124,10 @@ function resolveMutateArgs(argv: readonly string[], ctx: Context, usage: string,
   if (args.values.value !== undefined) value = args.values.value;
   if (args.values.dir !== undefined) dir = args.values.dir;
 
+  if (args.flags.has("plain") && args.flags.has("secret")) {
+    fail("--plain and --secret are opposites; pass one or neither");
+  }
+
   return {
     name,
     dir: resolveRuleDir(dir ?? ".", ctx.cwd),
@@ -125,6 +135,7 @@ function resolveMutateArgs(argv: readonly string[], ctx: Context, usage: string,
     alias: args.values.alias,
     aliasGiven: args.values.alias !== undefined,
     assumeYes: args.flags.has("yes") || args.flags.has("force"),
+    secret: args.flags.has("secret"),
   };
 }
 
@@ -141,10 +152,10 @@ function confirmPlaintext(ctx: Context, resolved: Resolved, value: string): void
 
   ctx.err(`slopenv: ${describeSuspicion(resolved.name, suspicion)}.\n`);
   ctx.err(`  \`set\` writes it to ${ctx.rulesPath} in plain text.\n`);
-  ctx.err(`  To put it in the keychain instead:  slopenv set-secret ${resolved.name} ${resolved.dir}\n`);
+  ctx.err(`  To put it in the keychain instead:  slopenv set --secret ${resolved.name} ${resolved.dir}\n`);
 
   if (!isInteractive()) {
-    fail(`refusing to store what looks like a credential in plain text. Pass --yes to override, or use \`set-secret\`.`);
+    fail(`refusing to store what looks like a credential in plain text. Pass --yes to override, or use \`set --secret\`.`);
   }
   if (!confirm("  Store it in plain text anyway? [y/N] ")) {
     fail("aborted — nothing was written");
@@ -223,9 +234,24 @@ function currentValue(ctx: Context, resolved: Resolved): string | undefined {
   }
 }
 
-export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
-  const usage = "usage: slopenv set-secret NAME[=VALUE] [DIR] [--alias TEXT]";
-  const resolved = resolveMutateArgs(argv, ctx, usage, "set-secret");
+const SET_USAGE = "usage: slopenv set NAME[=VALUE] [DIR] [--secret] [--alias TEXT]";
+
+/**
+ * `set` writes to the rules file; `set --secret` writes to the keychain.
+ *
+ * Plain is the default because that is what this command usually carries — a port,
+ * an environment name, a path — and because a default you override on most
+ * invocations is not a safe default, it is a reflex. What makes it safe instead is
+ * `confirmPlaintext`: anything that looks like a credential has to be confirmed,
+ * so the dangerous case is caught by detection rather than by making every
+ * ordinary variable pay for it.
+ */
+export function cmdSet(argv: readonly string[], ctx: Context): number {
+  const resolved = resolveMutateArgs(argv, ctx, SET_USAGE, "set");
+  return resolved.secret ? setSecret(ctx, resolved) : setPlain(ctx, resolved);
+}
+
+function setSecret(ctx: Context, resolved: Resolved): number {
   warnIfRisky(ctx, resolved.name);
 
   const value = resolved.value ?? readValue(promptFor(ctx, resolved), { hidden: true });
@@ -262,9 +288,7 @@ export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
   return 0;
 }
 
-export function cmdSet(argv: readonly string[], ctx: Context): number {
-  const usage = "usage: slopenv set NAME[=VALUE] [DIR] [--alias TEXT]";
-  const resolved = resolveMutateArgs(argv, ctx, usage, "set");
+function setPlain(ctx: Context, resolved: Resolved): number {
   warnIfRisky(ctx, resolved.name);
 
   // Plain values are not secret, so the prompt echoes — you can see what you type.

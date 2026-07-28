@@ -42,7 +42,7 @@ describe("the lists completion reads", () => {
 
   test("neither reads the keychain, so both stay fast enough for a TAB press", () => {
     const h = harness({ rulesPath, cwd: proj, env: {} });
-    runSync(["set-secret", "SECRET_ONE=v", proj], h.ctx);
+    runSync(["set", "--secret", "SECRET_ONE=v", proj], h.ctx);
     h.store.reads.length = 0;
 
     runSync(["list", "--names"], h.ctx);

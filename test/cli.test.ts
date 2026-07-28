@@ -94,7 +94,7 @@ describe("argument grammar", () => {
 
 describe("secrets", () => {
   test("the value goes to the keychain and never to the rules file", () => {
-    cli("set-secret", "TOKEN=sk-ant-oat01-secret-value", work);
+    cli("set", "--secret", "TOKEN=sk-ant-oat01-secret-value", work);
     expect(h.store.entries.get(accountFor(work, "TOKEN"))).toBe("sk-ant-oat01-secret-value");
 
     const raw = readFileSync(rulesPath, "utf8");
@@ -103,17 +103,17 @@ describe("secrets", () => {
   });
 
   test("the confirmation masks all but the last four characters", () => {
-    cli("set-secret", "TOKEN=sk-ant-oat01-abcd-work", work);
+    cli("set", "--secret", "TOKEN=sk-ant-oat01-abcd-work", work);
     expect(h.stdout()).toContain("•••work");
     expect(h.stdout()).not.toContain("sk-ant-oat01");
   });
 
   test("an empty secret is refused", () => {
-    expect(() => cli("set-secret", "TOKEN=", work)).toThrow(/empty value/);
+    expect(() => cli("set", "--secret", "TOKEN=", work)).toThrow(/empty value/);
   });
 
   test("rm deletes the rule and the keychain entry together", () => {
-    cli("set-secret", "TOKEN=v", work);
+    cli("set", "--secret", "TOKEN=v", work);
     cli("rm", "TOKEN", work);
     expect(loadRules(rulesPath).rules).toEqual([]);
     expect(h.store.entries.has(accountFor(work, "TOKEN"))).toBe(false);
@@ -124,7 +124,7 @@ describe("secrets", () => {
   });
 
   test("replacing a secret with a plain value cleans up the keychain entry", () => {
-    cli("set-secret", "TOKEN=secret", work);
+    cli("set", "--secret", "TOKEN=secret", work);
     cli("set", "TOKEN=not-secret", work, "--yes");
     expect(h.store.entries.has(accountFor(work, "TOKEN"))).toBe(false);
     expect(h.stderr()).toContain("deleted the keychain entry");
@@ -132,8 +132,8 @@ describe("secrets", () => {
   });
 
   test("the same variable in two directories is two independent secrets", () => {
-    cli("set-secret", "TOKEN=work-token", work);
-    cli("set-secret", "TOKEN=apps-token", apps);
+    cli("set", "--secret", "TOKEN=work-token", work);
+    cli("set", "--secret", "TOKEN=apps-token", apps);
     expect(h.store.entries.get(accountFor(work, "TOKEN"))).toBe("work-token");
     expect(h.store.entries.get(accountFor(apps, "TOKEN"))).toBe("apps-token");
     expect(loadRules(rulesPath).rules).toHaveLength(2);
@@ -142,7 +142,7 @@ describe("secrets", () => {
 
 describe("aliases", () => {
   test("an alias is stored and shown by list", () => {
-    cli("set-secret", "TOKEN=abcd1234", work, "--alias", "Claude Code for work");
+    cli("set", "--secret", "TOKEN=abcd1234", work, "--alias", "Claude Code for work");
     expect(loadRules(rulesPath).rules[0]?.alias).toBe("Claude Code for work");
     expect(cli("list")).toBe(0);
     expect(h.stdout()).toContain("Claude Code for work");
@@ -150,23 +150,23 @@ describe("aliases", () => {
   });
 
   test("updating a value keeps the alias unless the flag is given", () => {
-    cli("set-secret", "TOKEN=v1", work, "--alias", "original");
-    cli("set-secret", "TOKEN=v2", work);
+    cli("set", "--secret", "TOKEN=v1", work, "--alias", "original");
+    cli("set", "--secret", "TOKEN=v2", work);
     expect(loadRules(rulesPath).rules[0]?.alias).toBe("original");
 
-    cli("set-secret", "TOKEN=v3", work, "--alias", "renamed");
+    cli("set", "--secret", "TOKEN=v3", work, "--alias", "renamed");
     expect(loadRules(rulesPath).rules[0]?.alias).toBe("renamed");
   });
 
   test("an empty alias clears it", () => {
-    cli("set-secret", "TOKEN=v", work, "--alias", "temporary");
-    cli("set-secret", "TOKEN=v", work, "--alias", "");
+    cli("set", "--secret", "TOKEN=v", work, "--alias", "temporary");
+    cli("set", "--secret", "TOKEN=v", work, "--alias", "");
     expect(loadRules(rulesPath).rules[0]?.alias).toBeUndefined();
   });
 
   test("aliases distinguish two rules for the same variable", () => {
-    cli("set-secret", "CLAUDE_CODE_OAUTH_TOKEN=aaaa-work", work, "--alias", "Claude Code for work");
-    cli("set-secret", "CLAUDE_CODE_OAUTH_TOKEN=bbbb-pers", apps, "--alias", "Claude Code personal");
+    cli("set", "--secret", "CLAUDE_CODE_OAUTH_TOKEN=aaaa-work", work, "--alias", "Claude Code for work");
+    cli("set", "--secret", "CLAUDE_CODE_OAUTH_TOKEN=bbbb-pers", apps, "--alias", "Claude Code personal");
     cli("list");
     expect(h.stdout()).toContain("Claude Code for work");
     expect(h.stdout()).toContain("Claude Code personal");
@@ -180,7 +180,7 @@ describe("list and status", () => {
   });
 
   test("--json never contains a secret value", () => {
-    cli("set-secret", "TOKEN=sk-ant-oat01-secret", work);
+    cli("set", "--secret", "TOKEN=sk-ant-oat01-secret", work);
     cli("set", "NODE_ENV=development", work);
     cli("list", "--json");
     expect(h.stdout()).not.toContain("sk-ant-oat01-secret");
@@ -189,14 +189,14 @@ describe("list and status", () => {
   });
 
   test("a rule whose keychain entry has vanished is shown as missing, not as an error", () => {
-    cli("set-secret", "TOKEN=v", work);
+    cli("set", "--secret", "TOKEN=v", work);
     h.store.entries.clear();
     cli("list");
     expect(h.stdout()).toContain("<missing>");
   });
 
   test("status names the directory each value comes from", () => {
-    cli("set-secret", "TOKEN=work-token", work);
+    cli("set", "--secret", "TOKEN=work-token", work);
     cli("set", "PORT=3000", apps);
 
     h.ctx.cwd = apps;
@@ -235,14 +235,14 @@ describe("doctor", () => {
 
   test("passes when the hook is active and everything resolves", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    runSync(["set-secret", "TOKEN=v"], hooked.ctx);
+    runSync(["set", "--secret", "TOKEN=v"], hooked.ctx);
     expect(runSync(["doctor"], hooked.ctx)).toBe(0);
     expect(hooked.stdout()).toContain("no problems found");
   });
 
   test("flags a rule whose keychain entry is gone", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
-    runSync(["set-secret", "TOKEN=v"], hooked.ctx);
+    runSync(["set", "--secret", "TOKEN=v"], hooked.ctx);
     hooked.store.entries.clear();
     expect(runSync(["doctor"], hooked.ctx)).toBe(1);
     expect(hooked.stdout()).toContain("no keychain entry");
@@ -279,7 +279,7 @@ describe("export", () => {
   });
 
   test("a keychain miss warns on stderr and keeps stdout evaluable", () => {
-    cli("set-secret", "TOKEN=v", work);
+    cli("set", "--secret", "TOKEN=v", work);
     h.store.entries.clear();
     cli("export", work);
 
@@ -328,7 +328,7 @@ describe("plain-text credential guard", () => {
       /refusing to store what looks like a credential/,
     );
     expect(h.stderr()).toContain("looks like an Anthropic OAuth token");
-    expect(h.stderr()).toContain("slopenv set-secret TOKEN");
+    expect(h.stderr()).toContain("slopenv set --secret TOKEN");
     expect(loadRules(rulesPath).rules).toEqual([]);
   });
 
@@ -357,8 +357,8 @@ describe("plain-text credential guard", () => {
     expect(h.stderr()).not.toContain("plain text");
   });
 
-  test("set-secret never asks, since the value is going to the keychain", () => {
-    expect(cli("set-secret", "TOKEN=sk-ant-oat01-abcdefghijklmnop", work)).toBe(0);
+  test("--secret never asks, since the value is going to the keychain", () => {
+    expect(cli("set", "--secret", "TOKEN=sk-ant-oat01-abcdefghijklmnop", work)).toBe(0);
     expect(h.stderr()).not.toContain("looks like");
     expect(h.stderr()).not.toContain("Store it in plain text");
   });
@@ -385,7 +385,7 @@ describe("plain-text credential guard", () => {
     const hooked = harness({ rulesPath, cwd: work, env: { [STATE_VAR]: "x" } });
     expect(runSync(["doctor"], hooked.ctx)).toBe(1);
     expect(hooked.stdout()).toContain("looks like a GitHub token, stored in plain text");
-    expect(hooked.stdout()).toContain("slopenv set-secret LEAKED");
+    expect(hooked.stdout()).toContain("slopenv set --secret LEAKED");
   });
 });
 
@@ -454,8 +454,8 @@ describe("the hook not being wired up", () => {
   // The first failure everyone hits: binary installed, rule stored, nothing
   // injected, and no indication why. `doctor` alone was not enough, because
   // nobody runs `doctor` when they think things are working.
-  test("set-secret says so straight after storing", () => {
-    expect(cli("set-secret", "TOKEN=v", work)).toBe(0);
+  test("--secret says so straight after storing", () => {
+    expect(cli("set", "--secret", "TOKEN=v", work)).toBe(0);
     expect(h.stdout()).toContain("TOKEN");
     expect(h.stderr()).toContain("the shell hook is not active here");
     expect(h.stderr()).toContain('eval "$(slopenv hook zsh)"');
@@ -485,5 +485,64 @@ describe("the hook not being wired up", () => {
     cli("set", "NODE_ENV=development", work);
     cli("list", "--json");
     expect(() => JSON.parse(h.stdout())).not.toThrow();
+  });
+});
+
+describe("one command, two places to put a value", () => {
+  test("--plain is the default spelled out, and changes nothing", () => {
+    cli("set", "NODE_ENV=development", "--plain");
+    expect(loadRules(rulesPath).rules[0]).toEqual({ dir: work, name: "NODE_ENV", source: "plain", value: "development" });
+    expect(h.store.get(work, "NODE_ENV")).toBeNull();
+  });
+
+  test("--secret puts it in the keychain and nothing in the file", () => {
+    cli("set", "--secret", "TOKEN=sk-value");
+    const rule = loadRules(rulesPath).rules[0];
+    expect(rule?.source).toBe("keychain");
+    expect(rule?.value).toBeUndefined();
+    expect(h.store.get(work, "TOKEN")).toBe("sk-value");
+  });
+
+  test("the flag can go anywhere the parser sees it", () => {
+    cli("set", "TOKEN=sk-value", apps, "--secret");
+    expect(loadRules(rulesPath).rules[0]?.dir).toBe(apps);
+    expect(h.store.get(apps, "TOKEN")).toBe("sk-value");
+  });
+
+  test("--plain and --secret together are refused", () => {
+    expect(() => cli("set", "FOO=bar", "--plain", "--secret")).toThrow(/opposites/);
+  });
+
+  test("switching a rule from one to the other leaves nothing behind", () => {
+    cli("set", "--secret", "TOKEN=in-keychain");
+    expect(h.store.get(work, "TOKEN")).toBe("in-keychain");
+
+    cli("set", "TOKEN=now-plain", "--yes");
+    expect(h.store.get(work, "TOKEN")).toBeNull();
+    expect(loadRules(rulesPath).rules[0]?.value).toBe("now-plain");
+
+    cli("set", "--secret", "TOKEN=back-in-keychain");
+    expect(loadRules(rulesPath).rules[0]?.value).toBeUndefined();
+    expect(h.store.get(work, "TOKEN")).toBe("back-in-keychain");
+  });
+
+  test("`set-secret` says what replaced it rather than `unknown command`", () => {
+    const code = cli("set-secret", "TOKEN=x");
+    expect(code).toBe(1);
+    expect(h.stderr()).toContain("`set-secret` is now `set --secret`");
+    // And it really is gone, not quietly aliased: nothing was written.
+    expect(loadRules(rulesPath).rules).toEqual([]);
+    expect(h.store.get(work, "TOKEN")).toBeNull();
+  });
+
+  test("an actually unknown command still gets the plain message", () => {
+    expect(cli("frobnicate")).toBe(1);
+    expect(h.stderr()).toContain("unknown command");
+    expect(h.stderr()).not.toContain("is now");
+  });
+
+  test("the credential guard points at the new spelling", () => {
+    expect(() => cli("set", "GITHUB_TOKEN=ghp_aaaaaaaaaaaaaaaaaaaa")).toThrow(/set --secret/);
+    expect(h.stderr()).toContain("slopenv set --secret GITHUB_TOKEN");
   });
 });

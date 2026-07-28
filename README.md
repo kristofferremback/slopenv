@@ -59,18 +59,19 @@ That one line also sets up tab completion. See [Completion](#completion).
 ## Usage
 
 ```sh
-# Store a secret. Prompts with echo off, so it never reaches shell history.
-slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
-
-# Or inline, if you don't mind it in your history.
-slopenv set-secret GITHUB_TOKEN=ghp_xxxxxxxx ~/dev/oss
-
-# Or from a pipe, which keeps it out of history and out of argv.
-cat token.txt | slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./
-
-# Non-secrets go in the rules file in plain text.
+# Non-secrets go in the rules file, in plain text.
 slopenv set NODE_ENV=development ./
 slopenv set NODE_ENV ./              # prompts, echo on
+
+# --secret puts the value in the keychain instead. Prompts with echo off, so it
+# never reaches shell history.
+slopenv set --secret CLAUDE_CODE_OAUTH_TOKEN ./ --alias "Claude Code for work"
+
+# Or inline, if you don't mind it in your history.
+slopenv set --secret GITHUB_TOKEN=ghp_xxxxxxxx ~/dev/oss
+
+# Or from a pipe, which keeps it out of history and out of argv.
+cat token.txt | slopenv set --secret CLAUDE_CODE_OAUTH_TOKEN ./
 
 # Apply a value you already have to a second directory, without copying it.
 slopenv link CLAUDE_CODE_OAUTH_TOKEN --from ~/dev/threa
@@ -130,7 +131,7 @@ slopenv: 1 rule links to CLAUDE_CODE_OAUTH_TOKEN in /Users/you/dev/threa:
   Remove them first, or remove all of them together with: slopenv rm CLAUDE_CODE_OAUTH_TOKEN /Users/you/dev/threa --force
 ```
 
-Removing the link itself (`slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa-web`) never touches the value or the keychain. Giving a linked directory its own value with `set` or `set-secret` replaces the link, and says so.
+Removing the link itself (`slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa-web`) never touches the value or the keychain. Giving a linked directory its own value with `set` replaces the link, and says so.
 
 ### Secrets that live in 1Password
 
@@ -275,7 +276,8 @@ The candidates come from `slopenv list --names` and `slopenv list --dirs`, which
 
 | Form | Meaning |
 | --- | --- |
-| `slopenv set NAME=VALUE [DIR]` | set the value inline |
+| `slopenv set NAME=VALUE [DIR]` | set the value inline, in the rules file |
+| `--secret` on `set` | put the value in the keychain instead |
 | `slopenv set NAME [DIR]` | prompt for the value |
 | `slopenv set NAME VALUE DIR` | three-positional form, also accepted |
 | `slopenv link NAME --from SRCDIR [DIR]` | borrow the value that is already registered in `SRCDIR` |
@@ -322,7 +324,7 @@ Quote characters that reach slopenv are kept, never stripped. `slopenv set 'JSON
 $ slopenv set OPENAI_API_KEY=sk-proj-AbCdEf1234567890abcdefghij
 slopenv: OPENAI_API_KEY: that value looks like an OpenAI project key.
   `set` writes it to ~/.slopenv/rules.json in plain text.
-  To put it in the keychain instead:  slopenv set-secret OPENAI_API_KEY /Users/you/dev/app
+  To put it in the keychain instead:  slopenv set --secret OPENAI_API_KEY /Users/you/dev/app
   Store it in plain text anyway? [y/N]
 ```
 
@@ -354,8 +356,8 @@ A link takes part in this like any other rule. It is matched by its own director
 | What | Where | Notes |
 | --- | --- | --- |
 | Rules (directories, variable names, aliases, links, vault references) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
-| Non-secret values (`slopenv set`) | the same file, in plain text | This is what `set` means. Use `set-secret` for anything you care about. |
-| Secret values (`slopenv set-secret`) | macOS Keychain | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
+| Non-secret values (`slopenv set`) | the same file, in plain text | This is what `set` means. Use `set --secret` for anything you care about. |
+| Secret values (`slopenv set --secret`) | macOS Keychain | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
 | Per-shell state | `$SLOPENV_STATE` in your environment | Base64 JSON. No temp files, nothing shared between shells. |
 
 Nothing is ever written inside your project. There is no `.envrc` equivalent, so there is nothing to `.gitignore` and nothing to leak in a commit.
@@ -370,7 +372,7 @@ Secret values never touch disk in plaintext, never appear in `rules.json`, and n
 
 ### Shell history
 
-`slopenv set-secret NAME ./` prompts with echo off, and piping (`cat token.txt | slopenv set-secret NAME ./`) also keeps the value out of history. The inline `NAME=VALUE` form does not, which is the trade-off you make by using it.
+`slopenv set --secret NAME ./` prompts with echo off, and piping (`cat token.txt | slopenv set --secret NAME ./`) also keeps the value out of history. The inline `NAME=VALUE` form does not, which is the trade-off you make by using it.
 
 ### Process arguments
 
@@ -390,7 +392,7 @@ If slopenv were ever signed with a stable Developer ID, an in-process API would 
 
 ### Other platforms
 
-There is no Linux backend yet. Rather than fall back to plaintext, `set-secret` fails with `no keychain backend for this platform`. `Bun.secrets` would be a good fit there, since Linux uses libsecret, which has no per-binary ACL and so none of the problem above. It can drop into the `SecretStore` interface.
+There is no Linux backend yet. Rather than fall back to plaintext, `set --secret` fails with `no keychain backend for this platform`. `Bun.secrets` would be a good fit there, since Linux uses libsecret, which has no per-binary ACL and so none of the problem above. It can drop into the `SecretStore` interface.
 
 ## How it works
 

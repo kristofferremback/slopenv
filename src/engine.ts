@@ -122,7 +122,7 @@ export function computePlan(input: PlanInput): Plan {
             ? `${name} (${holder.dir}) has no cached value yet — skipping. ` +
                 `Pull it with: slopenv pull ${name} ${holder.dir}`
             : `no keychain entry for ${name} (${holder.dir}) — skipping. ` +
-                `Re-add it with: slopenv set-secret ${name} ${holder.dir}`,
+                `Re-add it with: slopenv set --secret ${name} ${holder.dir}`,
         );
         // Fall through to deactivation: better an honest unset than a stale value.
         continue;

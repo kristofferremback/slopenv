@@ -84,7 +84,7 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
 
   if (rules.length === 0) {
     ctx.out(`no rules yet (${tilde(ctx.rulesPath)})\n`);
-    ctx.out(`add one with:  slopenv set-secret MY_TOKEN ./\n`);
+    ctx.out(`add one with:  slopenv set --secret MY_TOKEN ./\n`);
     return 0;
   }
 
@@ -273,7 +273,7 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     for (const { rule, suspicion } of suspicious) {
       bad(
         `${describeSuspicion(rule.name, suspicion as NonNullable<typeof suspicion>)}, stored in plain text ` +
-          `(${tilde(rule.dir)}) — move it with: slopenv ${rule.source === "vault" ? `pull ${rule.name} --secret` : `set-secret ${rule.name}`} ${rule.dir}`,
+          `(${tilde(rule.dir)}) — move it with: slopenv ${rule.source === "vault" ? `pull ${rule.name} --secret` : `set --secret ${rule.name}`} ${rule.dir}`,
       );
     }
   }
@@ -284,7 +284,7 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     for (const rule of sortRules(secrets)) {
       try {
         const value = ctx.secretStore().get(rule.dir, rule.name);
-        if (value === null) bad(`${rule.name} (${tilde(rule.dir)}): no keychain entry — re-add with \`slopenv set-secret ${rule.name} ${rule.dir}\``);
+        if (value === null) bad(`${rule.name} (${tilde(rule.dir)}): no keychain entry — re-add with \`slopenv set --secret ${rule.name} ${rule.dir}\``);
         else ok(`${rule.name} (${tilde(rule.dir)}): ${maskSecret(value)}`);
       } catch (err) {
         bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
