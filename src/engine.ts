@@ -1,5 +1,6 @@
 import { dirCovers, resolveRules } from "./match.ts";
 import { effectiveRule, type Rule } from "./rules.ts";
+import { describeAge } from "./duration.ts";
 import type { SecretStore } from "./secrets/index.ts";
 import { exportStatement, unsetStatement } from "./shell.ts";
 import { emptyState, type ActiveEntry, type State } from "./state.ts";
@@ -14,6 +15,8 @@ export interface PlanInput {
   store: SecretStore;
   /** Fingerprint of the rules file backing `rules`. */
   rev: string;
+  /** Injected so the staleness check is testable. */
+  now?: number;
 }
 
 export interface Plan {
@@ -40,8 +43,28 @@ export interface Plan {
  * holds nothing is desired, so everything active takes the ordinary leave-scope
  * path and the shell's own values come back. Leaving the paused directory ends it.
  */
+/**
+ * A cached vault value that is past its refresh window.
+ *
+ * Deliberately a warning and not a refusal: the alternative is either blocking the
+ * prompt on a network call or leaving you with no value at all, and both are worse
+ * than an old token plus a line telling you it is old.
+ */
+function pullOverdue(rule: Rule, now: number): string | null {
+  if (rule.ttl === undefined || rule.fetched === undefined) return null;
+  const fetched = Date.parse(rule.fetched);
+  if (Number.isNaN(fetched)) return null;
+  if (now - fetched <= rule.ttl * 1000) return null;
+
+  return (
+    `${rule.name} (${rule.dir}) was pulled ${describeAge(rule.fetched, now)} and its refresh window has passed — ` +
+    `using the cached value. Refresh it with: slopenv pull ${rule.name} ${rule.dir}`
+  );
+}
+
 export function computePlan(input: PlanInput): Plan {
   const { rules, pwd, prevState, env, store, rev } = input;
+  const now = input.now ?? Date.now();
 
   // The pause is pinned to a directory rather than to the shell alone, so that
   // walking out of the project is enough to end it — the exit you cannot forget
@@ -82,14 +105,25 @@ export function computePlan(input: PlanInput): Plan {
     if (holder.source === "plain") {
       value = holder.value ?? "";
     } else {
+      // A vault rule reads from the keychain like any other secret. The vault CLI
+      // itself is never invoked here: it costs hundreds of milliseconds, needs the
+      // network, and can raise a biometric prompt — none of which belongs on a
+      // path that runs on every `cd`. `slopenv pull` is what fills this cache.
       value = store.get(holder.dir, name);
       if (value === null) {
         warnings.push(
-          `no keychain entry for ${name} (${holder.dir}) — skipping. ` +
-            `Re-add it with: slopenv set-secret ${name} ${holder.dir}`,
+          holder.source === "vault"
+            ? `${name} (${holder.dir}) has no cached value yet — skipping. ` +
+                `Pull it with: slopenv pull ${name} ${holder.dir}`
+            : `no keychain entry for ${name} (${holder.dir}) — skipping. ` +
+                `Re-add it with: slopenv set-secret ${name} ${holder.dir}`,
         );
         // Fall through to deactivation: better an honest unset than a stale value.
         continue;
+      }
+      if (holder.source === "vault") {
+        const overdue = pullOverdue(holder, now);
+        if (overdue !== null) warnings.push(overdue);
       }
     }
 

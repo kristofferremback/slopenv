@@ -9,6 +9,7 @@ import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
 import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
 import { cmdLink, cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+import { cmdPull } from "./commands/pull.ts";
 import { cmdOff, cmdOn } from "./commands/session.ts";
 import { cmdUpdate } from "./commands/update.ts";
 import { VERSION } from "./version.ts";
@@ -25,6 +26,8 @@ usage: slopenv <command> [args]
                                   (asks first if the value looks like a credential)
   link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
                                   another directory, without copying it
+  pull NAME --ref REF [DIR]       fetch a value from 1Password and cache it in the
+                                  keychain (\`pull --all\` re-fetches every one)
   rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
   off                             unload slopenv's variables in this shell only,
                                   until you \`slopenv on\` or leave the directory
@@ -42,6 +45,8 @@ common flags:
   --dir DIR       the directory a rule applies to (defaults to the current one)
   --value VALUE   pass a value that would otherwise be misread
   --from DIR      the directory \`link\` borrows a value from
+  --ref REF       a secret reference, e.g. "op://Work/Claude Code/credential"
+  --ttl 30d       how long before \`pull\` says a cached value is overdue
   --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
                   (--force / -f do the same thing; \`rm --force\` removes links too)
@@ -56,12 +61,17 @@ examples:
   slopenv set FULL_NAME="Kristoffer Remback"     # equivalent — your shell does the work
   slopenv link GITHUB_TOKEN --from ~/dev/oss     # same value, one more directory
   slopenv off                                    # this shell only, ends when you leave
+  slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token"
+  slopenv pull --all                             # rebuild the keychain on a new machine
 
 DIR covers itself and everything under it. When two rules define the same
 variable, the deeper directory wins.
 
 \`link\` borrows rather than copies: the value stays in one place, so changing it
 there changes it everywhere it is linked.
+
+\`pull\` keeps the reference in the rules file and the value in the keychain, so the
+vault is never consulted on a \`cd\` — only when you pull.
 
 \`off\` changes no rules and no other terminal. It ends when you \`slopenv on\` or
 when you leave the directory it was pinned to, which it tells you about.
@@ -78,6 +88,7 @@ const COMMANDS: Record<string, CommandFn> = {
   set: cmdSet,
   link: cmdLink,
   rm: cmdRm,
+  pull: cmdPull,
   off: cmdOff,
   on: cmdOn,
   list: cmdList,

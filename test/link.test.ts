@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { computePlan } from "../src/engine.ts";
-import { effectiveRule, linksTo, loadRules, parseRules, serializeRules, type Rule } from "../src/rules.ts";
+import { effectiveRule, linksTo, loadRules, parseRules, RULES_VERSION, serializeRules, type Rule } from "../src/rules.ts";
 import { accountFor } from "../src/secrets/index.ts";
 import { MemorySecretStore } from "../src/secrets/memory.ts";
 import { emptyState } from "../src/state.ts";
@@ -318,8 +318,11 @@ describe("links in the rules file", () => {
     }
   });
 
-  test("a version-2 file is refused by name, not by a confusing complaint about `source`", () => {
-    expect(() => parseRules(JSON.stringify({ version: 3, rules: [] }))).toThrow(/written by a newer slopenv/);
+  test("a file from a newer slopenv is refused by name, not by a confusing complaint about `source`", () => {
+    // Deliberately relative to the current version: this is about what happens
+    // when a build meets a file it is too old for, whatever the numbers are.
+    const text = JSON.stringify({ version: RULES_VERSION + 1, rules: [] });
+    expect(() => parseRules(text)).toThrow(/written by a newer slopenv/);
   });
 
   test("round-trips a link", () => {

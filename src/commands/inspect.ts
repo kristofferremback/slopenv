@@ -7,6 +7,8 @@ import { maskSecret } from "../prompt.ts";
 import { effectiveRule, loadRules, type Rule } from "../rules.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
 import { decodeState, hookInactiveNotice, hookIsActive, STATE_VAR } from "../state.ts";
+import { describeAge, formatDuration } from "../duration.ts";
+import { engineById } from "../vault/index.ts";
 
 function sortRules(rules: readonly Rule[]): Rule[] {
   return [...rules].sort((a, b) => a.dir.localeCompare(b.dir) || a.name.localeCompare(b.name));
@@ -84,15 +86,17 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
     return 0;
   }
 
-  // The BORROWS FROM column only appears once there is a link to put in it.
+  // One extra column, and only when there is something to put in it: where a link
+  // borrows from, or where a vault rule was pulled from.
   const anyLinks = rules.some((r) => r.source === "link");
+  const anyRefs = rules.some((r) => r.source === "vault");
   const header = ["DIRECTORY", "VARIABLE", "SOURCE", "VALUE", "ALIAS"];
-  if (anyLinks) header.splice(3, 0, "BORROWS FROM");
+  if (anyLinks || anyRefs) header.splice(3, 0, anyRefs ? "FROM" : "BORROWS FROM");
 
   const rows: string[][] = [header];
   for (const rule of rules) {
     const row = [tilde(rule.dir), rule.name, rule.source, shownValue(ctx, rules, rule), shownAlias(rules, rule)];
-    if (anyLinks) row.splice(3, 0, rule.target ? tilde(rule.target) : "");
+    if (anyLinks || anyRefs) row.splice(3, 0, rule.ref ?? (rule.target ? tilde(rule.target) : ""));
     rows.push(row);
   }
 
@@ -132,8 +136,10 @@ export function cmdStatus(argv: readonly string[], ctx: Context): number {
   for (const name of [...active.keys()].sort()) {
     const rule = active.get(name) as Rule;
     const inShell = state.active[name] !== undefined ? "yes" : "no";
-    // For a link, FROM is the whole path the value takes to get here.
-    const from = rule.target ? `${tilde(rule.dir)} -> ${tilde(rule.target)}` : tilde(rule.dir);
+    // FROM is the whole path the value takes to get here: through a link, or in
+    // from a vault.
+    const origin = rule.target ? tilde(rule.target) : rule.ref;
+    const from = origin ? `${tilde(rule.dir)} -> ${origin}` : tilde(rule.dir);
     rows.push([name, rule.source, shownValue(ctx, rules, rule), from, inShell, shownAlias(rules, rule)]);
   }
   table(rows, ctx.out);
@@ -209,6 +215,42 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
       // link. Checked anyway: doctor is where "cannot happen" gets verified.
       if (!holder) bad(`${rule.name} (${tilde(rule.dir)}): links to ${tilde(rule.target ?? "?")}, where there is no rule for it`);
       else ok(`${rule.name} (${tilde(rule.dir)}) borrows from ${tilde(holder.dir)} [${holder.source}]`);
+    }
+  }
+
+  const refs = rules.filter((r) => r.source === "vault");
+  if (refs.length > 0) {
+    ctx.out(`\nvault references (${refs.length})\n`);
+    const now = Date.now();
+    for (const rule of sortRules(refs)) {
+      const engine = engineById(rule.engine as string);
+      const when = rule.fetched ? describeAge(rule.fetched, now) : "never";
+      // The cache is what the hot path actually reads, so its absence is the
+      // failure — an unreachable vault is not, until you next pull.
+      let cached: string | null = null;
+      try {
+        cached = ctx.secretStore().get(rule.dir, rule.name);
+      } catch (err) {
+        bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
+        continue;
+      }
+
+      if (!engine) {
+        bad(`${rule.name} (${tilde(rule.dir)}): unknown engine ${JSON.stringify(rule.engine)} — hand-edited, or written by a newer slopenv`);
+      } else if (cached === null) {
+        bad(`${rule.name} (${tilde(rule.dir)}): nothing cached yet — run \`slopenv pull ${rule.name} ${rule.dir}\``);
+      } else if (rule.ttl !== undefined && rule.fetched !== undefined && now - Date.parse(rule.fetched) > rule.ttl * 1000) {
+        note(
+          `${rule.name} (${tilde(rule.dir)}): ${maskSecret(cached)} from ${rule.ref}, pulled ${when} — ` +
+            `past its ${formatDuration(rule.ttl)} refresh window`,
+        );
+      } else {
+        ok(`${rule.name} (${tilde(rule.dir)}): ${maskSecret(cached)} from ${rule.ref}, pulled ${when}`);
+      }
+
+      if (engine && !Bun.which(engine.binary, { PATH: ctx.env.PATH ?? "" })) {
+        note(`${engine.binary} is not installed, so this one cannot be refreshed here — ${engine.install}`);
+      }
     }
   }
 

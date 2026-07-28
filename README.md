@@ -75,6 +75,10 @@ slopenv set NODE_ENV ./              # prompts, echo on
 # Apply a value you already have to a second directory, without copying it.
 slopenv link CLAUDE_CODE_OAUTH_TOKEN --from ~/dev/threa
 
+# Or take it from 1Password, and keep the reference rather than the value.
+slopenv pull CLAUDE_CODE_OAUTH_TOKEN --ref "op://Work/Claude Code/credential"
+slopenv pull --all               # re-fetch every reference, e.g. on a new machine
+
 # Turn it off in this terminal for a while, without changing any rule.
 slopenv off
 slopenv on
@@ -127,6 +131,49 @@ slopenv: 1 rule links to CLAUDE_CODE_OAUTH_TOKEN in /Users/you/dev/threa:
 ```
 
 Removing the link itself (`slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa-web`) never touches the value or the keychain. Giving a linked directory its own value with `set` or `set-secret` replaces the link, and says so.
+
+### Secrets that live in 1Password
+
+`slopenv pull` fetches a value from an external secret manager and caches it in the keychain. What lands in `rules.json` is the **reference**, never the value:
+
+```
+$ slopenv pull CLAUDE_CODE_OAUTH_TOKEN --ref "op://Work/Claude Code/credential" --alias "Claude Code for Work"
+CLAUDE_CODE_OAUTH_TOKEN = •••awAA  [vault]  /Users/you/dev/telness  Claude Code for Work
+  pulled from op://Work/Claude Code/credential
+```
+
+```sh
+slopenv pull CLAUDE_CODE_OAUTH_TOKEN      # re-fetch; the reference is already known
+slopenv pull --all                        # re-fetch every one of them
+```
+
+In 1Password, the item's ⌄ menu has **Copy Secret Reference**, which gives you exactly the `op://` string this wants. You need the [1Password CLI](https://developer.1password.com/docs/cli/) (`brew install 1password-cli`) and the desktop app integration turned on under Settings → Developer.
+
+**The vault is never consulted on a `cd`.** `op read` costs 200–1000 ms, needs the network, and raises a Touch ID prompt whenever the app has locked — none of which belongs on something that runs every time you change directory. Once pulled, a vault rule is read out of the keychain exactly like any other secret, at the same ~31 ms, offline. Only `slopenv pull` talks to 1Password, and only because you typed it.
+
+That means a cached value can go out of date, which is what `--ttl` is for:
+
+```sh
+slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token" --ttl 30d
+```
+
+Past that window, entering the directory still exports the cached value and adds one line on stderr saying it is overdue and how to refresh it. It never blocks your prompt on the network: an old token plus a warning beats both a frozen terminal and a variable that is silently unset.
+
+#### A reference, not a command
+
+There is no way to store a command for slopenv to run. The rule holds an engine name and the vault's own reference string, and slopenv builds the argument list itself from a table in the source — no shell, no interpolation, and the reference is passed as a single `argv` element however many quotes and dollar signs it contains. A rules file cannot ask slopenv to execute something of its choosing.
+
+#### What this is actually for
+
+`rules.json` stops containing secrets and starts describing where they live, so it becomes something you can keep in your dotfiles. A new machine is then:
+
+```sh
+slopenv pull --all
+```
+
+One failure does not stop the rest — finishing is the point — but the exit code is non-zero and the commands to retry are printed.
+
+`link` works on top of a reference, so one pull rotates every directory that borrows it. `rm` takes the cached value with it. `doctor` reports each reference with its cache state and age, and calls a missing cache a failure, because that is the thing that actually breaks.
 
 ### Turning it off for a bit
 
@@ -194,6 +241,7 @@ The candidates come from `slopenv list --names` and `slopenv list --dirs`, which
 | `slopenv set NAME [DIR]` | prompt for the value |
 | `slopenv set NAME VALUE DIR` | three-positional form, also accepted |
 | `slopenv link NAME --from SRCDIR [DIR]` | borrow the value that is already registered in `SRCDIR` |
+| `slopenv pull NAME --ref REF [DIR]` | fetch from a vault and cache it; `--ttl 30d` sets a refresh window |
 | `--dir DIR` / `--value VALUE` | for anything that would otherwise be misread |
 | `--yes` / `-y` (or `--force` / `-f`) | skip the credential confirmation described below |
 | `--force` / `-f` on `rm` | also remove the rules that link to the one being removed |
@@ -266,14 +314,14 @@ A link takes part in this like any other rule. It is matched by its own director
 
 | What | Where | Notes |
 | --- | --- | --- |
-| Rules (directories, variable names, aliases, links) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
+| Rules (directories, variable names, aliases, links, vault references) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
 | Non-secret values (`slopenv set`) | the same file, in plain text | This is what `set` means. Use `set-secret` for anything you care about. |
 | Secret values (`slopenv set-secret`) | macOS Keychain | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
 | Per-shell state | `$SLOPENV_STATE` in your environment | Base64 JSON. No temp files, nothing shared between shells. |
 
 Nothing is ever written inside your project. There is no `.envrc` equivalent, so there is nothing to `.gitignore` and nothing to leak in a commit.
 
-`rules.json` carries a version, and the file is only written as version 2 once it actually contains a link. A rules file without links stays readable by an older slopenv; one with links tells an older build to update rather than complaining about a rule shape it does not know.
+`rules.json` carries a version, and the file only claims the version it actually needs: 2 once it contains a link, 3 once it contains a vault reference, 1 otherwise. A file without either stays readable by an older slopenv; one with them tells an older build to update rather than complaining about a rule shape it does not know.
 
 ## Security notes
 

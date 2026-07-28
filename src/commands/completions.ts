@@ -19,6 +19,7 @@ const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["set-secret", "store a secret in the keychain and add a rule"],
   ["set", "add a plain-text rule for a non-secret value"],
   ["link", "apply a value you already have elsewhere to another directory"],
+  ["pull", "fetch a value from 1Password and cache it in the keychain"],
   ["rm", "remove a rule, and its keychain entry if it had one"],
   ["off", "unload the variables in this shell only, until you leave or turn it on"],
   ["on", "load them again after turning them off"],
@@ -88,6 +89,17 @@ ${described}
             '1:variable:_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'
           ;;
+        pull)
+          _arguments \\
+            '--ref[secret reference, e.g. op://Vault/Item/field]:reference:' \\
+            '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
+            '--alias[human label shown by list]:alias:' \\
+            '--ttl[how long before a cached value is called overdue]:duration:(1h 12h 1d 7d 30d 90d)' \\
+            '--engine[which vault resolves the reference]:engine:(1password)' \\
+            '--all[re-fetch every reference you have]' \\
+            '1:variable:_slopenv_names' \\
+            '2:directory:_slopenv_ruledirs'
+          ;;
         rm)
           _arguments \\
             '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
@@ -148,13 +160,13 @@ _slopenv() {
       COMPREPLY+=( \$(compgen -d -- "\$cur") )
       return
       ;;
-    --value|--alias)
+    --value|--alias|--ref|--ttl)
       return
       ;;
   esac
 
   case "\$command" in
-    set|set-secret|rm|link)
+    set|set-secret|rm|link|pull)
       if [ "\$COMP_CWORD" -eq 2 ]; then
         COMPREPLY=( \$(compgen -W "\$(command slopenv list --names 2>/dev/null)" -- "\$cur") )
       else
@@ -164,6 +176,8 @@ _slopenv() {
           COMPREPLY+=( \$(compgen -W "--from" -- "\$cur") )
         elif [ "\$command" = rm ]; then
           COMPREPLY+=( \$(compgen -W "--force" -- "\$cur") )
+        elif [ "\$command" = pull ]; then
+          COMPREPLY+=( \$(compgen -W "--ref --ttl --all --engine" -- "\$cur") )
         fi
       fi
       ;;

@@ -101,7 +101,7 @@ export function decodeState(encoded: string | undefined): State {
       const src = entry.src;
       if (prev !== null && typeof prev !== "string") continue;
       if (typeof dir !== "string") continue;
-      if (src !== "keychain" && src !== "plain" && src !== "link") continue;
+      if (src !== "keychain" && src !== "plain" && src !== "link" && src !== "vault") continue;
       active[name] = { prev, dir, src };
     }
 
