@@ -43,8 +43,9 @@ jobs:
         run: bun test
 
       - name: Build both macOS architectures
-        # Only macOS: set-secret has no backend elsewhere and fails on purpose, so
-        # shipping a Linux binary would just be a slower way to print that error.
+        # Only macOS: the keychain has no backend elsewhere and `set --secret`
+        # fails on purpose, so shipping a Linux binary would just be a slower way
+        # to print that error.
         run: |
           mkdir -p dist
           for target in bun-darwin-arm64 bun-darwin-x64; do
@@ -79,7 +80,7 @@ jobs:
           Open a new shell, then run `slopenv doctor`.
 
           macOS only: secrets live in the Keychain and there is no backend for other
-          platforms yet, so `set-secret` fails loudly rather than falling back to disk.
+          platforms yet, so `set --secret` fails loudly rather than falling back to disk.
           Check a download against `SHA256SUMS`.
           NOTES
 
