@@ -5,7 +5,7 @@ import type { Context } from "../context.ts";
 import { dirCovers, resolveRules } from "../match.ts";
 import { resolvePwd, resolveRuleDir } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
-import { loadRules, type Rule } from "../rules.ts";
+import { effectiveRule, loadRules, type Rule } from "../rules.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
 import { decodeState, hookInactiveNotice, hookIsActive, STATE_VAR } from "../state.ts";
 
@@ -33,6 +33,27 @@ function table(rows: readonly string[][], out: (text: string) => void): void {
       .trimEnd();
     out(`${line}\n`);
   }
+}
+
+/**
+ * The value a rule produces, ready to print: masked for a secret, followed through
+ * for a link. Never throws — an unreadable keychain should not take down `list`.
+ */
+function shownValue(ctx: Context, rules: readonly Rule[], rule: Rule): string {
+  const holder = effectiveRule(rules, rule);
+  if (!holder) return "<broken link>";
+  if (holder.source === "plain") return holder.value ?? "";
+  try {
+    const value = ctx.secretStore().get(holder.dir, holder.name);
+    return value === null ? "<missing>" : maskSecret(value);
+  } catch {
+    return "<unreadable>";
+  }
+}
+
+/** A link has no label of its own unless you gave it one; the value's label applies. */
+function shownAlias(rules: readonly Rule[], rule: Rule): string {
+  return rule.alias ?? (rule.source === "link" ? (effectiveRule(rules, rule)?.alias ?? "") : "");
 }
 
 /**
@@ -68,20 +89,16 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
     return 0;
   }
 
-  const rows: string[][] = [["DIRECTORY", "VARIABLE", "SOURCE", "VALUE", "ALIAS"]];
+  // The BORROWS FROM column only appears once there is a link to put in it.
+  const anyLinks = rules.some((r) => r.source === "link");
+  const header = ["DIRECTORY", "VARIABLE", "SOURCE", "VALUE", "ALIAS"];
+  if (anyLinks) header.splice(3, 0, "BORROWS FROM");
+
+  const rows: string[][] = [header];
   for (const rule of rules) {
-    let shown: string;
-    if (rule.source === "plain") {
-      shown = rule.value ?? "";
-    } else {
-      try {
-        const value = ctx.secretStore().get(rule.dir, rule.name);
-        shown = value === null ? "<missing>" : maskSecret(value);
-      } catch {
-        shown = "<unreadable>";
-      }
-    }
-    rows.push([tilde(rule.dir), rule.name, rule.source, shown, rule.alias ?? ""]);
+    const row = [tilde(rule.dir), rule.name, rule.source, shownValue(ctx, rules, rule), shownAlias(rules, rule)];
+    if (anyLinks) row.splice(3, 0, rule.target ? tilde(rule.target) : "");
+    rows.push(row);
   }
 
   table(rows, ctx.out);
@@ -111,19 +128,10 @@ export function cmdStatus(argv: readonly string[], ctx: Context): number {
   const rows: string[][] = [["VARIABLE", "SOURCE", "VALUE", "FROM", "IN SHELL", "ALIAS"]];
   for (const name of [...active.keys()].sort()) {
     const rule = active.get(name) as Rule;
-    let shown: string;
-    if (rule.source === "plain") {
-      shown = rule.value ?? "";
-    } else {
-      try {
-        const value = ctx.secretStore().get(rule.dir, rule.name);
-        shown = value === null ? "<missing>" : maskSecret(value);
-      } catch {
-        shown = "<unreadable>";
-      }
-    }
     const inShell = state.active[name] !== undefined ? "yes" : "no";
-    rows.push([name, rule.source, shown, tilde(rule.dir), inShell, rule.alias ?? ""]);
+    // For a link, FROM is the whole path the value takes to get here.
+    const from = rule.target ? `${tilde(rule.dir)} -> ${tilde(rule.target)}` : tilde(rule.dir);
+    rows.push([name, rule.source, shownValue(ctx, rules, rule), from, inShell, shownAlias(rules, rule)]);
   }
   table(rows, ctx.out);
 
@@ -181,6 +189,18 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     ctx.out(`\nrule directories\n`);
     for (const rule of sortRules(missingDirs)) {
       bad(`${rule.name}: directory no longer exists — ${rule.dir}`);
+    }
+  }
+
+  const links = rules.filter((r) => r.source === "link");
+  if (links.length > 0) {
+    ctx.out(`\nlinks (${links.length})\n`);
+    for (const rule of sortRules(links)) {
+      const holder = effectiveRule(rules, rule);
+      // Unreachable through `loadRules`, which refuses a file with a dangling
+      // link. Checked anyway: doctor is where "cannot happen" gets verified.
+      if (!holder) bad(`${rule.name} (${tilde(rule.dir)}): links to ${tilde(rule.target ?? "?")}, where there is no rule for it`);
+      else ok(`${rule.name} (${tilde(rule.dir)}) borrows from ${tilde(holder.dir)} [${holder.source}]`);
     }
   }
 

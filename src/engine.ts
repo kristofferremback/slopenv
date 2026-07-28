@@ -1,5 +1,5 @@
 import { resolveRules } from "./match.ts";
-import type { Rule } from "./rules.ts";
+import { effectiveRule, type Rule } from "./rules.ts";
 import type { SecretStore } from "./secrets/index.ts";
 import { exportStatement, unsetStatement } from "./shell.ts";
 import { emptyState, type ActiveEntry, type State } from "./state.ts";
@@ -56,15 +56,25 @@ export function computePlan(input: PlanInput): Plan {
       continue;
     }
 
+    // A link holds no value of its own; the rule it points at does.
+    const holder = effectiveRule(rules, rule);
+    if (holder === undefined) {
+      warnings.push(
+        `${name} (${rule.dir}) links to ${rule.target}, where there is no rule for it — skipping. ` +
+          `Fix it with: slopenv rm ${name} ${rule.dir}`,
+      );
+      continue;
+    }
+
     let value: string | null;
-    if (rule.source === "plain") {
-      value = rule.value ?? "";
+    if (holder.source === "plain") {
+      value = holder.value ?? "";
     } else {
-      value = store.get(rule.dir, name);
+      value = store.get(holder.dir, name);
       if (value === null) {
         warnings.push(
-          `no keychain entry for ${name} (${rule.dir}) — skipping. ` +
-            `Re-add it with: slopenv set-secret ${name} ${rule.dir}`,
+          `no keychain entry for ${name} (${holder.dir}) — skipping. ` +
+            `Re-add it with: slopenv set-secret ${name} ${holder.dir}`,
         );
         // Fall through to deactivation: better an honest unset than a stale value.
         continue;

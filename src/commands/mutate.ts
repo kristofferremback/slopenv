@@ -1,11 +1,14 @@
 import { parseArgs } from "../args.ts";
 import type { Context } from "../context.ts";
 import { fail } from "../errors.ts";
+import { dirCovers, resolveRules } from "../match.ts";
 import { isDirectory, resolveRuleDir } from "../paths.ts";
 import { describeSuspicion, detectSecretish } from "../secretish.ts";
 import { confirm, isInteractive, maskSecret, readValue } from "../prompt.ts";
 import {
   assertValidName,
+  effectiveRule,
+  linksTo,
   loadRules,
   removeRule,
   RISKY_NAMES,
@@ -157,6 +160,15 @@ function findRule(file: RulesFile, dir: string, name: string): Rule | undefined 
   return file.rules.find((r) => ruleKey(r.dir, r.name) === ruleKey(dir, name));
 }
 
+/**
+ * Giving a directory its own value silently detaches it from the one it borrowed.
+ * That is a reasonable thing to want, but not a reasonable thing to discover later.
+ */
+function warnIfBrokeLink(ctx: Context, replaced: Rule | undefined): void {
+  if (replaced?.source !== "link") return;
+  ctx.err(`slopenv: this directory used to link to ${replaced.target}; it now has its own value\n`);
+}
+
 function warnIfRisky(ctx: Context, name: string): void {
   if (RISKY_NAMES.has(name)) {
     ctx.err(
@@ -182,16 +194,22 @@ function promptFor(ctx: Context, resolved: Resolved): string {
 
 function currentValue(ctx: Context, resolved: Resolved): string | undefined {
   let existing: Rule | undefined;
+  let rules: readonly Rule[] = [];
   try {
-    existing = findRule(loadRules(ctx.rulesPath), resolved.dir, resolved.name);
+    const file = loadRules(ctx.rulesPath);
+    rules = file.rules;
+    existing = findRule(file, resolved.dir, resolved.name);
   } catch {
     return undefined; // A broken rules file is not worth failing a prompt over.
   }
   if (!existing) return undefined;
-  if (existing.source === "plain") return existing.value;
+
+  const holder = effectiveRule(rules, existing);
+  if (!holder) return undefined;
+  if (holder.source === "plain") return holder.value;
 
   try {
-    const stored = ctx.secretStore().get(resolved.dir, resolved.name);
+    const stored = ctx.secretStore().get(holder.dir, resolved.name);
     return stored === null ? undefined : maskSecret(stored);
   } catch {
     return undefined;
@@ -211,6 +229,7 @@ export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
   ctx.secretStore().set(resolved.dir, resolved.name, value);
 
   let stored: Rule | undefined;
+  let replaced: Rule | undefined;
   try {
     updateRules(ctx.rulesPath, (file) => {
       const existing = findRule(file, resolved.dir, resolved.name);
@@ -218,7 +237,9 @@ export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
       const alias = nextAlias(resolved, existing);
       if (alias) rule.alias = alias;
       stored = rule;
-      return upsertRule(file, rule).file;
+      const result = upsertRule(file, rule);
+      replaced = result.replaced;
+      return result.file;
     });
   } catch (err) {
     ctx.err(
@@ -228,6 +249,7 @@ export function cmdSetSecret(argv: readonly string[], ctx: Context): number {
     throw err;
   }
 
+  warnIfBrokeLink(ctx, replaced);
   ctx.out(`${describe(stored as Rule, maskSecret(value))}\n`);
   if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
   return 0;
@@ -268,35 +290,150 @@ export function cmdSet(argv: readonly string[], ctx: Context): number {
     }
   }
 
+  warnIfBrokeLink(ctx, replaced);
   ctx.out(`${describe(stored as Rule, value)}\n`);
   if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
   return 0;
 }
 
-export function cmdRm(argv: readonly string[], ctx: Context): number {
-  const args = parseArgs(argv, { value: ["dir"] });
+function countLinks(n: number): string {
+  return n === 1 ? "1 rule links" : `${n} rules link`;
+}
+
+/**
+ * Point a second directory at a value that already exists somewhere else.
+ *
+ * A link, not a copy: one value, N directories. Copying a keychain rule would put
+ * a second copy of the same secret in the keychain and give you two places to
+ * rotate it, which is exactly the thing this tool exists to avoid.
+ */
+export function cmdLink(argv: readonly string[], ctx: Context): number {
+  const usage = "usage: slopenv link NAME --from SRCDIR [DIR] [--alias TEXT]";
+  const args = parseArgs(argv, { value: ["from", "dir", "alias"] });
+
   const name = args.positional[0];
-  if (!name) fail("usage: slopenv rm NAME [DIR]");
-  if (args.positional.length > 2) fail("usage: slopenv rm NAME [DIR]");
+  if (!name) fail(usage);
+  if (args.positional.length > 2) fail(usage);
+  assertValidName(name);
+
+  const from = args.values.from;
+  if (from === undefined) {
+    fail(`link needs the directory to borrow from:  slopenv link ${name} --from DIR`);
+  }
+
+  const dir = resolveRuleDir(args.values.dir ?? args.positional[1] ?? ".", ctx.cwd);
+  const fromDir = resolveRuleDir(from, ctx.cwd);
+
+  const file = loadRules(ctx.rulesPath);
+
+  // `--from` takes any directory the source rule covers, not just the directory
+  // it is registered for, so `--from ~/dev/threa/apps` finds the rule at
+  // ~/dev/threa. Same resolution the shell hook does on every cd.
+  const holder = resolveRules(file.rules, fromDir).get(name);
+  if (!holder) {
+    fail(
+      `no rule for ${name} in ${fromDir}.\n` +
+        `  \`link\` borrows an existing value; it does not create one.\n` +
+        `  See what is there with:  slopenv status ${fromDir}`,
+    );
+  }
+
+  // Flatten: a link's target is always a real rule, so links never chain and
+  // cannot cycle.
+  const target = holder.source === "link" ? (holder.target as string) : holder.dir;
+
+  if (target === dir) fail(`${name} already lives in ${dir} — there is nothing to link to`);
+
+  const existing = findRule(file, dir, name);
+  const dependents = linksTo(file.rules, dir, name);
+  if (dependents.length > 0) {
+    fail(
+      `${countLinks(dependents.length)} to ${name} in ${dir}, so it cannot become a link itself:\n` +
+        dependents.map((r) => `      ${r.dir}`).join("\n") +
+        `\n  Re-point or remove them first.`,
+    );
+  }
+
+  warnIfRisky(ctx, name);
+  if (dirCovers(target, dir)) {
+    ctx.err(`slopenv: heads up — the rule in ${target} already covers ${dir}, so this link changes nothing today\n`);
+  }
+
+  // No alias of its own means `list` shows the target's — the label describes the
+  // value, and there is only one value.
+  const rule: Rule = { dir, name, source: "link", target };
+  const alias = args.values.alias !== undefined ? args.values.alias || undefined : existing?.alias;
+  if (alias) rule.alias = alias;
+
+  let replaced: Rule | undefined;
+  updateRules(ctx.rulesPath, (current) => {
+    const result = upsertRule(current, rule);
+    replaced = result.replaced;
+    return result.file;
+  });
+
+  // Same rule as `set`: a rule that stops being a keychain rule must not leave its
+  // secret behind in the keychain.
+  if (replaced?.source === "keychain") {
+    try {
+      ctx.secretStore().remove(dir, name);
+      ctx.err(`slopenv: replaced a keychain rule — deleted the keychain entry for ${name}\n`);
+    } catch (err) {
+      ctx.err(`slopenv: could not delete the replaced keychain entry for ${name}: ${(err as Error).message}\n`);
+    }
+  }
+
+  ctx.out(`${name} -> ${target}  [link]  ${dir}${rule.alias ? `  ${rule.alias}` : ""}\n`);
+  if (!hookIsActive(ctx.env)) ctx.err(hookInactiveNotice());
+  return 0;
+}
+
+export function cmdRm(argv: readonly string[], ctx: Context): number {
+  const usage = "usage: slopenv rm NAME [DIR] [--force]";
+  const args = parseArgs(argv, { value: ["dir"], boolean: ["force"], short: { f: "force" } });
+  const name = args.positional[0];
+  if (!name) fail(usage);
+  if (args.positional.length > 2) fail(usage);
 
   // Removal tolerates a directory that no longer exists — that is often exactly
   // why you are removing the rule.
   const dir = resolveRuleDir(args.values.dir ?? args.positional[1] ?? ".", ctx.cwd, { mustExist: false });
 
+  // Rules that link here would be left pointing at nothing, which is a state the
+  // rules file refuses to load at all. Say so instead of creating it.
+  const dependents = linksTo(loadRules(ctx.rulesPath).rules, dir, name);
+  if (dependents.length > 0 && !args.flags.has("force")) {
+    fail(
+      `${countLinks(dependents.length)} to ${name} in ${dir}:\n` +
+        dependents.map((r) => `      ${r.dir}`).join("\n") +
+        `\n  Remove them first, or remove all of them together with: slopenv rm ${name} ${dir} --force`,
+    );
+  }
+
   let removed: Rule | undefined;
+  // What gets cascaded is decided under the lock, so the report is what happened
+  // rather than what the check above saw a moment earlier.
+  let cascaded: Rule[] = [];
   updateRules(ctx.rulesPath, (file) => {
     const result = removeRule(file, dir, name);
     removed = result.removed;
-    return result.file;
+    if (!removed) return result.file;
+
+    cascaded = linksTo(result.file.rules, dir, name);
+    let rules = result.file;
+    for (const dependent of cascaded) rules = removeRule(rules, dependent.dir, name).file;
+    return rules;
   });
 
   if (!removed) fail(`no rule for ${name} in ${dir}`);
 
+  const alsoRemoved = cascaded.length === 0 ? "" : `, and ${cascaded.length} link${cascaded.length === 1 ? "" : "s"} to it`;
   if (removed.source === "keychain") {
     ctx.secretStore().remove(dir, name);
-    ctx.out(`removed ${name} (${dir}) and its keychain entry\n`);
+    ctx.out(`removed ${name} (${dir}) and its keychain entry${alsoRemoved}\n`);
   } else {
-    ctx.out(`removed ${name} (${dir})\n`);
+    ctx.out(`removed ${name} (${dir})${alsoRemoved}\n`);
   }
+  for (const dependent of cascaded) ctx.out(`  also removed the link in ${dependent.dir}\n`);
   return 0;
 }

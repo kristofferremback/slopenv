@@ -45,6 +45,10 @@ jobs:
           ./slopenv set NODE_ENV=development "$RUNNER_TEMP/proj"
           ./slopenv list
           ./slopenv export "$RUNNER_TEMP/proj" | grep -q "export NODE_ENV='development'"
+          # A linked directory must export the value the original holds.
+          mkdir -p "$RUNNER_TEMP/other"
+          ./slopenv link NODE_ENV --from "$RUNNER_TEMP/proj" "$RUNNER_TEMP/other"
+          ./slopenv export "$RUNNER_TEMP/other" | grep -q "export NODE_ENV='development'"
 
       - name: Upload build
         uses: actions/upload-artifact@v5

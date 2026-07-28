@@ -8,7 +8,7 @@ import { cmdEdit } from "./commands/edit.ts";
 import { cmdExport } from "./commands/export.ts";
 import { cmdHook } from "./commands/hook.ts";
 import { cmdDoctor, cmdList, cmdStatus } from "./commands/inspect.ts";
-import { cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
+import { cmdLink, cmdRm, cmdSet, cmdSetSecret } from "./commands/mutate.ts";
 import { cmdUpdate } from "./commands/update.ts";
 import { VERSION } from "./version.ts";
 
@@ -22,6 +22,8 @@ usage: slopenv <command> [args]
                                   (omit =VALUE to be prompted, hidden, off the record)
   set NAME[=VALUE] [DIR]          add a plain-text rule for a non-secret value
                                   (asks first if the value looks like a credential)
+  link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
+                                  another directory, without copying it
   rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
   list                            show every rule (secret values are masked)
   status [DIR]                    show what applies in a directory and which rule wins
@@ -35,9 +37,10 @@ usage: slopenv <command> [args]
 common flags:
   --dir DIR       the directory a rule applies to (defaults to the current one)
   --value VALUE   pass a value that would otherwise be misread
+  --from DIR      the directory \`link\` borrows a value from
   --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
-                  (--force / -f do the same thing)
+                  (--force / -f do the same thing; \`rm --force\` removes links too)
   --json          machine-readable output (\`list\`; never includes secret values)
   --names/--dirs  plain one-per-line output (\`list\`), for scripts and completion
 
@@ -47,9 +50,13 @@ examples:
   slopenv set-secret GITHUB_TOKEN=ghp_xxx ~/dev/oss
   slopenv set "FULL_NAME=Kristoffer Remback"     # quote values containing spaces
   slopenv set FULL_NAME="Kristoffer Remback"     # equivalent — your shell does the work
+  slopenv link GITHUB_TOKEN --from ~/dev/oss     # same value, one more directory
 
 DIR covers itself and everything under it. When two rules define the same
 variable, the deeper directory wins.
+
+\`link\` borrows rather than copies: the value stays in one place, so changing it
+there changes it everywhere it is linked.
 
 environment:
   SLOPENV_CONFIG   path to the rules file (default ~/.slopenv/rules.json)
@@ -61,6 +68,7 @@ type CommandFn = (argv: readonly string[], ctx: Context) => number | Promise<num
 const COMMANDS: Record<string, CommandFn> = {
   "set-secret": cmdSetSecret,
   set: cmdSet,
+  link: cmdLink,
   rm: cmdRm,
   list: cmdList,
   status: cmdStatus,

@@ -72,6 +72,9 @@ cat token.txt | slopenv set-secret CLAUDE_CODE_OAUTH_TOKEN ./
 slopenv set NODE_ENV=development ./
 slopenv set NODE_ENV ./              # prompts, echo on
 
+# Apply a value you already have to a second directory, without copying it.
+slopenv link CLAUDE_CODE_OAUTH_TOKEN --from ~/dev/threa
+
 slopenv list      # every rule; secret values shown as •••1234
 slopenv status    # what applies right here, and which rule won
 slopenv rm CLAUDE_CODE_OAUTH_TOKEN ./
@@ -88,6 +91,38 @@ DIRECTORY          VARIABLE                 SOURCE    VALUE    ALIAS
 ~/dev/threa        NODE_ENV                 plain     development
 ~/dev/threa/apps   PORT                     plain     3000
 ```
+
+### One value, several directories
+
+A second repo that belongs to the same project usually wants the same token. `link` gives it that token without giving it a second copy:
+
+```sh
+cd ~/dev/threa-web
+slopenv link CLAUDE_CODE_OAUTH_TOKEN --from ~/dev/threa
+```
+
+The rule that lands in `~/dev/threa-web` holds no value of its own. It borrows the one in `~/dev/threa`, so rotating the token there rotates it everywhere it is linked, and a secret still exists exactly once in your keychain.
+
+```
+DIRECTORY        VARIABLE                 SOURCE    BORROWS FROM  VALUE    ALIAS
+~/dev/threa      CLAUDE_CODE_OAUTH_TOKEN  keychain                •••work  Claude Code for work
+~/dev/threa-web  CLAUDE_CODE_OAUTH_TOKEN  link      ~/dev/threa   •••work  Claude Code for work
+```
+
+`--from` takes any directory the source rule covers, not only the directory it is registered for, so `--from ~/dev/threa/apps` finds the rule at `~/dev/threa` and records that. A trailing `DIR` argument works the way it does on `set`: `slopenv link TOKEN --from ~/dev/threa ./packages/api` links a subdirectory instead of the current one.
+
+Links never chain. Linking to something that is itself a link resolves to the real rule at the moment you create it, which is also why a cycle cannot be built. A link is one hop, always.
+
+Because a link is only meaningful next to the value it borrows, removing that value is refused rather than silently breaking it:
+
+```
+$ slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa
+slopenv: 1 rule links to CLAUDE_CODE_OAUTH_TOKEN in /Users/you/dev/threa:
+      /Users/you/dev/threa-web
+  Remove them first, or remove all of them together with: slopenv rm CLAUDE_CODE_OAUTH_TOKEN /Users/you/dev/threa --force
+```
+
+Removing the link itself (`slopenv rm CLAUDE_CODE_OAUTH_TOKEN ~/dev/threa-web`) never touches the value or the keychain. Giving a linked directory its own value with `set` or `set-secret` replaces the link, and says so.
 
 ### Staying up to date
 
@@ -115,6 +150,9 @@ $ slopenv rm PORT
 
 $ slopenv set NODE_ENV <TAB>
 ~/dev/threa  ~/dev/threa/apps          # directories those rules cover, then any directory
+
+$ slopenv link TOKEN --from <TAB>
+~/dev/threa  ~/dev/threa/apps          # the same list, for the directory to borrow from
 ```
 
 The candidates come from `slopenv list --names` and `slopenv list --dirs`, which print one item per line and never read the keychain, so they are cheap enough to sit behind a TAB press. Both are also useful on their own for scripting.
@@ -126,8 +164,10 @@ The candidates come from `slopenv list --names` and `slopenv list --dirs`, which
 | `slopenv set NAME=VALUE [DIR]` | set the value inline |
 | `slopenv set NAME [DIR]` | prompt for the value |
 | `slopenv set NAME VALUE DIR` | three-positional form, also accepted |
+| `slopenv link NAME --from SRCDIR [DIR]` | borrow the value that is already registered in `SRCDIR` |
 | `--dir DIR` / `--value VALUE` | for anything that would otherwise be misread |
 | `--yes` / `-y` (or `--force` / `-f`) | skip the credential confirmation described below |
+| `--force` / `-f` on `rm` | also remove the rules that link to the one being removed |
 | `--names` / `--dirs` on `list` | one variable name or rule directory per line |
 
 With a bare `NAME`, a second positional is always a directory. `DIR` defaults to the current directory. Trailing newlines are trimmed from prompted and piped values.
@@ -190,16 +230,20 @@ When two rules define the same variable, the deeper directory wins:
 
 On leaving, a variable is unset. If your shell already had a value for it before slopenv touched it, that value is restored instead.
 
+A link takes part in this like any other rule. It is matched by its own directory and can be shadowed by a deeper rule in the usual way; only the value comes from somewhere else.
+
 ## Where things are stored
 
 | What | Where | Notes |
 | --- | --- | --- |
-| Rules (directories, variable names, aliases) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
+| Rules (directories, variable names, aliases, links) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
 | Non-secret values (`slopenv set`) | the same file, in plain text | This is what `set` means. Use `set-secret` for anything you care about. |
 | Secret values (`slopenv set-secret`) | macOS Keychain | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
 | Per-shell state | `$SLOPENV_STATE` in your environment | Base64 JSON. No temp files, nothing shared between shells. |
 
 Nothing is ever written inside your project. There is no `.envrc` equivalent, so there is nothing to `.gitignore` and nothing to leak in a commit.
+
+`rules.json` carries a version, and the file is only written as version 2 once it actually contains a link. A rules file without links stays readable by an older slopenv; one with links tells an older build to update rather than complaining about a rule shape it does not know.
 
 ## Security notes
 

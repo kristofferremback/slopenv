@@ -18,6 +18,7 @@ import { fail } from "../errors.ts";
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
   ["set-secret", "store a secret in the keychain and add a rule"],
   ["set", "add a plain-text rule for a non-secret value"],
+  ["link", "apply a value you already have elsewhere to another directory"],
   ["rm", "remove a rule, and its keychain entry if it had one"],
   ["list", "show every rule"],
   ["status", "show what applies in a directory and which rule wins"],
@@ -77,9 +78,18 @@ ${described}
             '1:variable (NAME or NAME=VALUE):_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'
           ;;
+        link)
+          _arguments \\
+            '--from[directory to borrow the value from]:directory:_slopenv_ruledirs' \\
+            '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
+            '--alias[human label shown by list]:alias:' \\
+            '1:variable:_slopenv_names' \\
+            '2:directory:_slopenv_ruledirs'
+          ;;
         rm)
           _arguments \\
             '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
+            '(-f --force)'{-f,--force}'[also remove rules that link to this one]' \\
             '1:variable:_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'
           ;;
@@ -131,7 +141,7 @@ _slopenv() {
   fi
 
   case "\$prev" in
-    --dir)
+    --dir|--from)
       COMPREPLY=( \$(compgen -W "\$(command slopenv list --dirs 2>/dev/null)" -- "\$cur") )
       COMPREPLY+=( \$(compgen -d -- "\$cur") )
       return
@@ -142,12 +152,17 @@ _slopenv() {
   esac
 
   case "\$command" in
-    set|set-secret|rm)
+    set|set-secret|rm|link)
       if [ "\$COMP_CWORD" -eq 2 ]; then
         COMPREPLY=( \$(compgen -W "\$(command slopenv list --names 2>/dev/null)" -- "\$cur") )
       else
         COMPREPLY=( \$(compgen -W "\$(command slopenv list --dirs 2>/dev/null)" -- "\$cur") )
         COMPREPLY+=( \$(compgen -d -- "\$cur") )
+        if [ "\$command" = link ]; then
+          COMPREPLY+=( \$(compgen -W "--from" -- "\$cur") )
+        elif [ "\$command" = rm ]; then
+          COMPREPLY+=( \$(compgen -W "--force" -- "\$cur") )
+        fi
       fi
       ;;
     list)
