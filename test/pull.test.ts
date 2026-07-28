@@ -8,7 +8,8 @@ import { accountFor } from "../src/secrets/index.ts";
 import { MemorySecretStore } from "../src/secrets/memory.ts";
 import { emptyState } from "../src/state.ts";
 import { engineForRef, trimOneNewline } from "../src/vault/index.ts";
-import { cleanup, harness, runSync, tempDir, type Harness } from "./helpers.ts";
+import { run } from "../src/cli.ts";
+import { cleanup, harness, tempDir, type Harness } from "./helpers.ts";
 
 /**
  * `slopenv pull` against a stand-in `op` on `$PATH`.
@@ -46,9 +47,10 @@ function fakeOp(body: string): void {
   chmodSync(path, 0o755);
 }
 
-function cli(...argv: string[]): number {
+/** `pull` is async (it overlaps vault reads); everything else here is not. */
+async function cli(...argv: string[]): Promise<number> {
   h.reset();
-  return runSync(argv, h.ctx);
+  return await run(argv, h.ctx);
 }
 
 beforeEach(() => {
@@ -70,8 +72,8 @@ beforeEach(() => {
 afterEach(() => cleanup(root));
 
 describe("pull", () => {
-  test("fetches, caches in the keychain, and records the reference", () => {
-    expect(cli("pull", "TOKEN", "--ref", "op://Work/Claude Code/credential")).toBe(0);
+  test("fetches, caches in the keychain, and records the reference", async () => {
+    expect(await cli("pull", "TOKEN", "--ref", "op://Work/Claude Code/credential")).toBe(0);
 
     // The value went to the keychain; the reference went to the rules file.
     expect(h.store.get(work, "TOKEN")).toBe("sk-from-1password");
@@ -89,42 +91,42 @@ describe("pull", () => {
     expect(h.stdout()).not.toContain("sk-from-1password");
   });
 
-  test("passes the reference as one argument, with no shell in between", () => {
+  test("passes the reference as one argument, with no shell in between", async () => {
     // A reference full of shell metacharacters is the whole point of argv.
     const ref = `op://Work/It's "risky"; $(touch ${root}/pwned)/credential`;
-    cli("pull", "TOKEN", "--ref", ref);
+    await cli("pull", "TOKEN", "--ref", ref);
 
     expect(calls()).toEqual([`op read ${ref}`]);
     expect(() => readFileSync(join(root, "pwned"))).toThrow();
   });
 
-  test("the rules file holds a reference, never the secret", () => {
-    cli("pull", "TOKEN", "--ref", "op://Work/Claude/credential");
+  test("the rules file holds a reference, never the secret", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://Work/Claude/credential");
     const text = readFileSync(rulesPath, "utf8");
     expect(text).toContain("op://Work/Claude/credential");
     expect(text).not.toContain("sk-from-1password");
   });
 
-  test("trims the newline op prints, and nothing else", () => {
+  test("trims the newline op prints, and nothing else", async () => {
     fakeOp(`printf 'value-with-trailing-space \\n'`);
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
     expect(h.store.get(work, "TOKEN")).toBe("value-with-trailing-space ");
   });
 
-  test("a directory argument works the same way it does for set", () => {
-    cli("pull", "TOKEN", apps, "--ref", "op://a/b/c");
+  test("a directory argument works the same way it does for set", async () => {
+    await cli("pull", "TOKEN", apps, "--ref", "op://a/b/c");
     expect((loadRules(rulesPath).rules[0] as Rule).dir).toBe(apps);
     expect(h.store.get(apps, "TOKEN")).toBe("sk-from-1password");
   });
 
-  test("re-pulling needs no reference, and keeps the alias and the window", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c", "--alias", "Work token", "--ttl", "30d");
+  test("re-pulling needs no reference, and keeps the alias and the window", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c", "--alias", "Work token", "--ttl", "30d");
     const first = loadRules(rulesPath).rules[0] as Rule;
     expect(first.alias).toBe("Work token");
     expect(first.ttl).toBe(2_592_000);
 
     fakeOp(`printf 'rotated\\n'`);
-    expect(cli("pull", "TOKEN")).toBe(0);
+    expect(await cli("pull", "TOKEN")).toBe(0);
 
     const second = loadRules(rulesPath).rules[0] as Rule;
     expect(second.ref).toBe("op://a/b/c");
@@ -134,64 +136,64 @@ describe("pull", () => {
     expect(h.stdout()).toContain("pulled from");
   });
 
-  test("says when a value came back unchanged", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
-    expect(cli("pull", "TOKEN")).toBe(0);
+  test("says when a value came back unchanged", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect(await cli("pull", "TOKEN")).toBe(0);
     expect(h.stdout()).toContain("unchanged");
   });
 
-  test("refuses to pull a rule that has no reference, and says how to give it one", () => {
-    cli("set", "PORT=3000");
-    expect(() => cli("pull", "PORT")).toThrow(/no secret reference[\s\S]*plain rule[\s\S]*--ref/);
+  test("refuses to pull a rule that has no reference, and says how to give it one", async () => {
+    await cli("set", "PORT=3000");
+    await expect(cli("pull", "PORT")).rejects.toThrow(/no secret reference[\s\S]*plain rule[\s\S]*--ref/);
   });
 });
 
 describe("when op fails", () => {
-  test("nothing is written — no rule, no keychain entry", () => {
+  test("nothing is written — no rule, no keychain entry", async () => {
     fakeOp(`echo '[ERROR] item "Nope" doesn.t exist' >&2; exit 1`);
-    expect(() => cli("pull", "TOKEN", "--ref", "op://Work/Nope/credential")).toThrow(/could not read/);
+    await expect(cli("pull", "TOKEN", "--ref", "op://Work/Nope/credential")).rejects.toThrow(/could not read/);
 
     expect(h.store.get(work, "TOKEN")).toBeNull();
     expect(loadRules(rulesPath).rules).toEqual([]);
   });
 
-  test("op's own message is shown, with advice when it is one we recognise", () => {
+  test("op's own message is shown, with advice when it is one we recognise", async () => {
     fakeOp(`echo '[ERROR] you are not currently signed in' >&2; exit 1`);
-    expect(() => cli("pull", "TOKEN", "--ref", "op://a/b/c")).toThrow(/op signin/);
+    await expect(cli("pull", "TOKEN", "--ref", "op://a/b/c")).rejects.toThrow(/op signin/);
   });
 
-  test("an empty value is refused rather than cached", () => {
+  test("an empty value is refused rather than cached", async () => {
     fakeOp(`printf '\\n'`);
-    expect(() => cli("pull", "TOKEN", "--ref", "op://a/b/c")).toThrow(/empty value/);
+    await expect(cli("pull", "TOKEN", "--ref", "op://a/b/c")).rejects.toThrow(/empty value/);
     expect(h.store.get(work, "TOKEN")).toBeNull();
   });
 
-  test("a missing op says how to install it, rather than reporting ENOENT", () => {
+  test("a missing op says how to install it, rather than reporting ENOENT", async () => {
     h = harness({ rulesPath, cwd: work, env: { PATH: join(root, "empty") } });
-    expect(() => cli("pull", "TOKEN", "--ref", "op://a/b/c")).toThrow(/brew install 1password-cli/);
+    await expect(cli("pull", "TOKEN", "--ref", "op://a/b/c")).rejects.toThrow(/brew install 1password-cli/);
   });
 
-  test("a reference slopenv has no engine for is refused before anything runs", () => {
-    expect(() => cli("pull", "TOKEN", "--ref", "bw://item/field")).toThrow(/no vault engine/);
-    expect(() => cli("pull", "TOKEN", "--ref", "just-a-string")).toThrow(/is not a secret reference/);
+  test("a reference slopenv has no engine for is refused before anything runs", async () => {
+    await expect(cli("pull", "TOKEN", "--ref", "bw://item/field")).rejects.toThrow(/no vault engine/);
+    await expect(cli("pull", "TOKEN", "--ref", "just-a-string")).rejects.toThrow(/is not a secret reference/);
     expect(calls()).toEqual([]);
   });
 
-  test("--engine that disagrees with the reference is refused", () => {
-    expect(() => cli("pull", "TOKEN", "--ref", "op://a/b/c", "--engine", "bitwarden")).toThrow(/unknown engine/);
+  test("--engine that disagrees with the reference is refused", async () => {
+    await expect(cli("pull", "TOKEN", "--ref", "op://a/b/c", "--engine", "bitwarden")).rejects.toThrow(/unknown engine/);
   });
 });
 
 describe("pull --all", () => {
-  beforeEach(() => {
-    cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
-    cli("pull", "OTHER", apps, "--ref", "op://Work/Two/credential");
-    cli("set", "PORT=3000");
+  beforeEach(async () => {
+    await cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
+    await cli("pull", "OTHER", apps, "--ref", "op://Work/Two/credential");
+    await cli("set", "PORT=3000");
   });
 
-  test("re-fetches every reference and leaves other rules alone", () => {
+  test("re-fetches every reference and leaves other rules alone", async () => {
     fakeOp(`printf 'refreshed\\n'`);
-    expect(cli("pull", "--all")).toBe(0);
+    expect(await cli("pull", "--all")).toBe(0);
 
     expect(h.store.get(work, "TOKEN")).toBe("refreshed");
     expect(h.store.get(apps, "OTHER")).toBe("refreshed");
@@ -202,9 +204,9 @@ describe("pull --all", () => {
     expect(calls().filter((c) => c.includes("PORT"))).toEqual([]);
   });
 
-  test("one failure does not stop the rest, and the exit code says so", () => {
+  test("one failure does not stop the rest, and the exit code says so", async () => {
     fakeOp(`case "$2" in *One*) echo 'nope' >&2; exit 1;; *) printf 'refreshed\\n';; esac`);
-    expect(cli("pull", "--all")).toBe(1);
+    expect(await cli("pull", "--all")).toBe(1);
 
     expect(h.store.get(apps, "OTHER")).toBe("refreshed");
     expect(h.stdout()).toContain("1 of 2 pulled");
@@ -212,17 +214,17 @@ describe("pull --all", () => {
     expect(h.stderr()).toContain("nope");
   });
 
-  test("a failed pull does not get a fresh timestamp", () => {
+  test("a failed pull does not get a fresh timestamp", async () => {
     const before = loadRules(rulesPath).rules.find((r) => r.name === "TOKEN")?.fetched;
     fakeOp(`echo 'nope' >&2; exit 1`);
-    cli("pull", "--all");
+    await cli("pull", "--all");
     expect(loadRules(rulesPath).rules.find((r) => r.name === "TOKEN")?.fetched).toBe(before as string);
   });
 
-  test("writes the rules file once, not once per secret", () => {
+  test("writes the rules file once, not once per secret", async () => {
     fakeOp(`printf 'refreshed\\n'`);
     const before = readFileSync(rulesPath, "utf8");
-    cli("pull", "--all");
+    await cli("pull", "--all");
     // Every write changes the fingerprint and makes live shells re-resolve, so
     // batching is not just tidiness.
     const after = loadRules(rulesPath).rules.filter((r) => r.source === "vault");
@@ -230,24 +232,116 @@ describe("pull --all", () => {
     expect(before).not.toBe(readFileSync(rulesPath, "utf8"));
   });
 
-  test("says what to do when there is nothing to pull", () => {
+  test("says what to do when there is nothing to pull", async () => {
     h = harness({ rulesPath: join(root, "empty.json"), cwd: work, env: { PATH: binDir } });
-    expect(cli("pull", "--all")).toBe(0);
+    expect(await cli("pull", "--all")).toBe(0);
     expect(h.stdout()).toContain("no vault references yet");
   });
 });
 
+describe("pull --all overlaps the waiting", () => {
+  /**
+   * A vault read is ~1.2s of network round trip that no amount of local work
+   * makes shorter, so the only way to make twenty of them bearable is to overlap
+   * them. This measures that without measuring time: each fake `op` appends a
+   * line when it starts and another when it finishes, and since those appends are
+   * ordered, the running total over the file *is* the number in flight.
+   */
+  let concurrencyLog: string;
+
+  function overlapping(): { max: number; firstRanAlone: boolean } {
+    const events = readFileSync(concurrencyLog, "utf8").split("\n").filter(Boolean);
+    let inFlight = 0;
+    let max = 0;
+    for (const event of events) {
+      inFlight += event === "start" ? 1 : -1;
+      max = Math.max(max, inFlight);
+    }
+    // The very first read is deliberately alone: it is the one that may raise a
+    // biometric prompt, and four of those at once would be a race over one dialog.
+    return { max, firstRanAlone: events[0] === "start" && events[1] === "end" };
+  }
+
+  /** A fake `op` slow enough that overlap is unambiguous. */
+  function slowFakeOp(): void {
+    const path = join(binDir, "op");
+    writeFileSync(
+      path,
+      // /bin/sleep by absolute path: the child's PATH is only the fake bin dir,
+      // so a bare `sleep` is not found and fails silently — which would make this
+      // measure nothing at all.
+      `#!/bin/sh\necho start >> ${JSON.stringify(concurrencyLog)}\n/bin/sleep 0.3\nprintf 'value\\n'\necho end >> ${JSON.stringify(concurrencyLog)}\n`,
+      { mode: 0o755 },
+    );
+    chmodSync(path, 0o755);
+  }
+
+  beforeEach(async () => {
+    concurrencyLog = join(root, "concurrency.log");
+    for (let i = 0; i < 9; i++) {
+      const dir = join(root, `repo-${i}`);
+      mkdirSync(dir, { recursive: true });
+      await cli("pull", `TOKEN_${i}`, dir, "--ref", `op://Work/Item${i}/credential`);
+    }
+    writeFileSync(concurrencyLog, "");
+    slowFakeOp();
+  });
+
+  test("reads run four at a time, after a first one on its own", async () => {
+    expect(await cli("pull", "--all")).toBe(0);
+
+    const { max, firstRanAlone } = overlapping();
+    expect(firstRanAlone).toBe(true);
+    expect(max).toBeGreaterThan(1);
+    expect(max).toBeLessThanOrEqual(4);
+  });
+
+  test("nine reads take nowhere near nine times one read", async () => {
+    const started = Date.now();
+    await cli("pull", "--all");
+    const elapsed = Date.now() - started;
+
+    // Sequentially this is 9 x 300ms (measured: ~2880ms). Overlapped it is 300ms
+    // for the first, then two rounds of four (~900ms). The threshold sits between
+    // the two with room on both sides — it is the shape being asserted, not a
+    // stopwatch reading.
+    expect(elapsed).toBeLessThan(1800);
+    expect(loadRules(rulesPath).rules.filter((r) => r.source === "vault")).toHaveLength(9);
+  });
+
+  test("results are reported in rule order however they interleave", async () => {
+    await cli("pull", "--all");
+    const names = [...h.stdout().matchAll(/TOKEN_(\d)/g)].map((m) => m[1]);
+    expect(names).toEqual([...names].sort());
+  });
+
+  test("one bad reference among many still costs only that one", async () => {
+    const path = join(binDir, "op");
+    writeFileSync(
+      path,
+      `#!/bin/sh\ncase "$2" in *Item3*) echo 'nope' >&2; exit 1;; esac\nprintf 'value\\n'\n`,
+      { mode: 0o755 },
+    );
+    chmodSync(path, 0o755);
+
+    expect(await cli("pull", "--all")).toBe(1);
+    expect(h.stdout()).toContain("8 of 9 pulled");
+    expect(h.stdout()).toContain("slopenv pull TOKEN_3");
+    expect(h.store.get(join(root, "repo-4"), "TOKEN_4")).toBe("value");
+  });
+});
+
 describe("the hot path never talks to the vault", () => {
-  test("export reads the cached value and spawns nothing", () => {
-    cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
+  test("export reads the cached value and spawns nothing", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
     writeFileSync(callLog, "");
 
-    expect(cli("export", work)).toBe(0);
+    expect(await cli("export", work)).toBe(0);
     expect(h.stdout()).toContain(`export TOKEN='sk-from-1password'`);
     expect(calls()).toEqual([]);
   });
 
-  test("a reference with no cached value yet points at pull, not set-secret", () => {
+  test("a reference with no cached value yet points at pull, not set-secret", async () => {
     const rule: Rule = { dir: work, name: "TOKEN", source: "vault", ref: "op://a/b/c", engine: "1password" };
     const plan = computePlan({
       rules: [rule],
@@ -261,7 +355,7 @@ describe("the hot path never talks to the vault", () => {
     expect(plan.warnings[0]).toContain("slopenv pull TOKEN");
   });
 
-  test("an overdue value is still exported, with a word about it", () => {
+  test("an overdue value is still exported, with a word about it", async () => {
     const store = new MemorySecretStore({ [accountFor(work, "TOKEN")]: "cached" });
     const rule: Rule = {
       dir: work,
@@ -289,7 +383,7 @@ describe("the hot path never talks to the vault", () => {
     expect(plan.warnings[0]).toContain("59 days ago");
   });
 
-  test("no ttl means no nagging", () => {
+  test("no ttl means no nagging", async () => {
     const store = new MemorySecretStore({ [accountFor(work, "TOKEN")]: "cached" });
     const rule: Rule = {
       dir: work,
@@ -305,69 +399,69 @@ describe("the hot path never talks to the vault", () => {
 });
 
 describe("vault rules alongside everything else", () => {
-  test("a link can borrow from a reference, and follows a re-pull", () => {
+  test("a link can borrow from a reference, and follows a re-pull", async () => {
     const web = join(root, "web");
     mkdirSync(web, { recursive: true });
 
-    cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
-    expect(cli("link", "TOKEN", "--from", work, web)).toBe(0);
+    await cli("pull", "TOKEN", "--ref", "op://Work/One/credential");
+    expect(await cli("link", "TOKEN", "--from", work, web)).toBe(0);
 
     // One value, one keychain entry, two directories — the link resolves through
     // the vault rule to the same cached secret.
-    expect(cli("export", web)).toBe(0);
+    expect(await cli("export", web)).toBe(0);
     expect(h.stdout()).toContain(`export TOKEN='sk-from-1password'`);
 
     fakeOp(`printf 'rotated\\n'`);
-    cli("pull", "TOKEN");
-    expect(cli("export", web)).toBe(0);
+    await cli("pull", "TOKEN");
+    expect(await cli("export", web)).toBe(0);
     expect(h.stdout()).toContain(`export TOKEN='rotated'`);
   });
 
-  test("rm takes the cached value with it", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
-    expect(cli("rm", "TOKEN")).toBe(0);
+  test("rm takes the cached value with it", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect(await cli("rm", "TOKEN")).toBe(0);
     expect(h.store.get(work, "TOKEN")).toBeNull();
     expect(h.stdout()).toContain("its cached value");
   });
 
-  test("replacing a reference with a plain value clears the cache and says so", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
-    expect(cli("set", "TOKEN=plain-now", "--yes")).toBe(0);
+  test("replacing a reference with a plain value clears the cache and says so", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect(await cli("set", "TOKEN=plain-now", "--yes")).toBe(0);
     expect(h.store.get(work, "TOKEN")).toBeNull();
     expect(h.stderr()).toContain("used to pull op://a/b/c");
   });
 
-  test("set-secret over a reference detaches it", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
-    expect(cli("set-secret", "TOKEN=typed-by-hand")).toBe(0);
+  test("set-secret over a reference detaches it", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
+    expect(await cli("set-secret", "TOKEN=typed-by-hand")).toBe(0);
     expect(loadRules(rulesPath).rules[0]?.source).toBe("keychain");
     expect(loadRules(rulesPath).rules[0]?.ref).toBeUndefined();
     expect(h.store.get(work, "TOKEN")).toBe("typed-by-hand");
   });
 
-  test("list shows the reference, and doctor reports the cache", () => {
-    cli("pull", "TOKEN", "--ref", "op://Work/One/credential", "--alias", "Work token");
+  test("list shows the reference, and doctor reports the cache", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://Work/One/credential", "--alias", "Work token");
 
-    cli("list");
+    await cli("list");
     expect(h.stdout()).toContain("FROM");
     expect(h.stdout()).toContain("op://Work/One/credential");
     expect(h.stdout()).toContain("Work token");
 
-    cli("doctor");
+    await cli("doctor");
     expect(h.stdout()).toContain("vault references (1)");
     expect(h.stdout()).toContain("pulled just now");
   });
 
-  test("doctor calls a missing cache a failure, since that is what breaks the hot path", () => {
-    cli("pull", "TOKEN", "--ref", "op://a/b/c");
+  test("doctor calls a missing cache a failure, since that is what breaks the hot path", async () => {
+    await cli("pull", "TOKEN", "--ref", "op://a/b/c");
     h.store.remove(work, "TOKEN");
-    expect(cli("doctor")).toBe(1);
+    expect(await cli("doctor")).toBe(1);
     expect(h.stdout()).toContain("nothing cached yet");
   });
 });
 
 describe("the rules file", () => {
-  test("only claims version 3 once it actually contains a reference", () => {
+  test("only claims version 3 once it actually contains a reference", async () => {
     const withLink = parseRules(
       JSON.stringify({
         version: 2,
@@ -388,7 +482,7 @@ describe("the rules file", () => {
     expect(withRef.version).toBe(3);
   });
 
-  test("refuses the malformed shapes a vault rule can take", () => {
+  test("refuses the malformed shapes a vault rule can take", async () => {
     const cases: [unknown, RegExp][] = [
       [{ dir: "/a", name: "V", source: "vault", engine: "1password" }, /ref must be a non-empty string/],
       [{ dir: "/a", name: "V", source: "vault", ref: "op://a/b/c" }, /engine must be a non-empty string/],
@@ -429,33 +523,33 @@ describe("advice is pinned to what op actually says", () => {
     ],
   ];
 
-  test("each real failure gets the advice that fits it", () => {
+  test("each real failure gets the advice that fits it", async () => {
     const engine = engineForRef("op://a/b/c");
     for (const [stderr, expected] of REAL_ERRORS) {
       expect(engine.hint(stderr)).toMatch(expected);
     }
   });
 
-  test("an unfamiliar failure gets no invented advice", () => {
+  test("an unfamiliar failure gets no invented advice", async () => {
     const engine = engineForRef("op://a/b/c");
     expect(engine.hint("[ERROR] something nobody has seen before")).toBeNull();
   });
 
-  test("the failure and the advice both reach the user", () => {
+  test("the failure and the advice both reach the user", async () => {
     fakeOp(`echo "item 'Employee/Notion' does not have a field 'Nope'" >&2; exit 1`);
-    expect(() => cli("pull", "TOKEN", "--ref", "op://Employee/Notion/Nope")).toThrow(
+    await expect(cli("pull", "TOKEN", "--ref", "op://Employee/Notion/Nope")).rejects.toThrow(
       /does not have a field[\s\S]*the item is there but the field is not/,
     );
   });
 });
 
 describe("small parts", () => {
-  test("references map to engines by scheme", () => {
+  test("references map to engines by scheme", async () => {
     expect(engineForRef("op://a/b/c").id).toBe("1password");
     expect(() => engineForRef("op:/a/b")).toThrow(/not a secret reference/);
   });
 
-  test("only the newline the CLI added is removed", () => {
+  test("only the newline the CLI added is removed", async () => {
     expect(trimOneNewline("value\n")).toBe("value");
     expect(trimOneNewline("value\r\n")).toBe("value");
     expect(trimOneNewline("value\n\n")).toBe("value\n");
@@ -463,7 +557,7 @@ describe("small parts", () => {
     expect(trimOneNewline("va\nlue")).toBe("va\nlue");
   });
 
-  test("durations round-trip", () => {
+  test("durations round-trip", async () => {
     expect(parseDuration("30d")).toBe(2_592_000);
     expect(parseDuration("12h")).toBe(43_200);
     expect(parseDuration("90")).toBe(90);
@@ -473,7 +567,7 @@ describe("small parts", () => {
     expect(() => parseDuration("0d")).toThrow(/greater than zero/);
   });
 
-  test("ages read the way a person would say them", () => {
+  test("ages read the way a person would say them", async () => {
     const now = Date.parse("2026-07-28T12:00:00Z");
     expect(describeAge("2026-07-28T11:59:30Z", now)).toBe("just now");
     expect(describeAge("2026-07-28T11:00:00Z", now)).toBe("60 minutes ago");

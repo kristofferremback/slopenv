@@ -149,7 +149,18 @@ slopenv pull --all                        # re-fetch every one of them
 
 In 1Password, the item's ⌄ menu has **Copy Secret Reference**, which gives you exactly the `op://` string this wants. You need the [1Password CLI](https://developer.1password.com/docs/cli/) (`brew install 1password-cli`) and the desktop app integration turned on under Settings → Developer.
 
-**The vault is never consulted on a `cd`.** `op read` costs 200–1000 ms, needs the network, and raises a Touch ID prompt whenever the app has locked — none of which belongs on something that runs every time you change directory. Once pulled, a vault rule is read out of the keychain exactly like any other secret, at the same ~31 ms, offline. Only `slopenv pull` talks to 1Password, and only because you typed it.
+**The vault is never consulted on a `cd`.** Measured against `op` 2.35 on an M3 Pro:
+
+| | |
+| --- | --- |
+| first `op read` in a terminal session | 6137 ms (a fingerprint is in there) |
+| every `op read` after it | ~1170 ms — a network round trip, and it stays one |
+| `slopenv export`, activating that same value | 42 ms |
+| a `cd` inside the directory, after the pull | no `op` at all |
+
+None of that belongs on something that runs every time you change directory. Once pulled, a vault rule is read out of the keychain exactly like any other secret, offline. Only `slopenv pull` talks to 1Password, and only because you typed it.
+
+1Password authorises per **terminal session** — terminal identity plus start time, expiring after 10 minutes of inactivity and whenever the app locks. So a whole `slopenv pull --all` costs one approval, not one per secret, and a second `pull` in the same terminal usually costs none.
 
 That means a cached value can go out of date, which is what `--ttl` is for:
 
@@ -170,6 +181,8 @@ There is no way to store a command for slopenv to run. The rule holds an engine 
 ```sh
 slopenv pull --all
 ```
+
+`--all` overlaps its reads four at a time, because ~1.17 s of network latency each is the whole cost and waiting for them one after another is the only avoidable part. The first read goes alone: it is the one that may raise the approval prompt, and four of those at once would be a race over a single dialog. Nine references take about a third of what they would sequentially.
 
 One failure does not stop the rest — finishing is the point — but the exit code is non-zero and the commands to retry are printed.
 

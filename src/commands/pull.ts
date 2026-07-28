@@ -6,7 +6,7 @@ import { resolveRuleDir, tilde } from "../paths.ts";
 import { maskSecret } from "../prompt.ts";
 import { loadRules, ruleKey, updateRules, upsertRule, type Rule } from "../rules.ts";
 import { hookInactiveNotice, hookIsActive } from "../state.ts";
-import { ENGINES, engineById, engineForRef, resolveRef, type VaultEngine } from "../vault/index.ts";
+import { ENGINES, engineById, engineForRef, resolveMany, resolveRef, type VaultEngine } from "../vault/index.ts";
 
 /**
  * `slopenv pull` — fetch a value from an external secret manager and cache it in
@@ -34,12 +34,7 @@ function resolveEngine(ref: string, requested: string | undefined): VaultEngine 
   return named;
 }
 
-/**
- * Fetch one rule's value and cache it in the keychain. Deliberately does not touch
- * rules.json: `--all` writes once at the end instead of once per secret, because
- * every write changes the file's fingerprint and makes every live shell re-resolve.
- */
-function fetchAndCache(ctx: Context, rule: Rule): { value: string; changed: boolean } {
+function engineFor(rule: Rule): VaultEngine {
   const engine = engineById(rule.engine as string);
   if (!engine) {
     fail(
@@ -48,9 +43,15 @@ function fetchAndCache(ctx: Context, rule: Rule): { value: string; changed: bool
         `  Known engines: ${knownEngines()}`,
     );
   }
+  return engine;
+}
 
-  const value = resolveRef(engine, rule.ref as string, { env: ctx.env });
-
+/**
+ * Put a resolved value in the keychain. Deliberately does not touch rules.json:
+ * `--all` writes once at the end instead of once per secret, because every write
+ * changes the file's fingerprint and makes every live shell re-resolve.
+ */
+function cache(ctx: Context, rule: Rule, value: string): { value: string; changed: boolean } {
   // Read before writing so that "unchanged" is the truth rather than an assumption.
   // A missing cache entry reads as a change, which is exactly right.
   let previous: string | null = null;
@@ -73,7 +74,7 @@ function record(ctx: Context, rules: readonly Rule[], now: Date): void {
   });
 }
 
-export function cmdPull(argv: readonly string[], ctx: Context): number {
+export async function cmdPull(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, {
     value: ["ref", "dir", "alias", "engine", "ttl"],
     boolean: ["all"],
@@ -87,7 +88,7 @@ export function cmdPull(argv: readonly string[], ctx: Context): number {
 
   if (args.flags.has("all")) {
     if (args.positional.length > 0 || args.values.ref !== undefined) fail(usage);
-    return pullAll(ctx, now);
+    return await pullAll(ctx, now);
   }
 
   const name = args.positional[0];
@@ -118,7 +119,7 @@ export function cmdPull(argv: readonly string[], ctx: Context): number {
   const ttl = args.values.ttl !== undefined ? parseDuration(args.values.ttl) : existing?.ttl;
   if (ttl !== undefined) rule.ttl = ttl;
 
-  const { value, changed } = fetchAndCache(ctx, rule);
+  const { value, changed } = cache(ctx, rule, await resolveRef(engineFor(rule), ref, { env: ctx.env }));
 
   try {
     record(ctx, [rule], now);
@@ -149,7 +150,7 @@ export function cmdPull(argv: readonly string[], ctx: Context): number {
  * — but the exit code is non-zero if anything failed, so a script cannot mistake a
  * partial run for a clean one.
  */
-function pullAll(ctx: Context, now: Date): number {
+async function pullAll(ctx: Context, now: Date): Promise<number> {
   const rules = loadRules(ctx.rulesPath)
     .rules.filter((r) => r.source === "vault")
     .sort((a, b) => a.dir.localeCompare(b.dir) || a.name.localeCompare(b.name));
@@ -160,18 +161,44 @@ function pullAll(ctx: Context, now: Date): number {
     return 0;
   }
 
+  // All the references for one engine go out together, so the waiting overlaps
+  // rather than stacking. Sequentially this is ~1.2s each; four at a time it is
+  // roughly that once. Grouped by engine because the batching is the engine's
+  // business, and a run can involve more than one.
+  const byEngine = new Map<string, Rule[]>();
+  for (const rule of rules) byEngine.set(rule.engine as string, [...(byEngine.get(rule.engine as string) ?? []), rule]);
+
+  const values = new Map<Rule, { value?: string; error?: unknown }>();
+  for (const group of byEngine.values()) {
+    const resolved = await resolveMany(
+      engineFor(group[0] as Rule),
+      group.map((r) => r.ref as string),
+      { env: ctx.env },
+    );
+    group.forEach((rule, index) => values.set(rule, resolved[index] ?? { error: new SlopenvError("no result") }));
+  }
+
   const pulled: Rule[] = [];
   const failed: Rule[] = [];
 
+  // Reported in the order the rules are listed, not the order they came back, so
+  // the output is the same however the resolving happened to interleave.
   for (const rule of rules) {
+    const result = values.get(rule);
+    if (result?.value === undefined) {
+      failed.push(rule);
+      const err = result?.error;
+      const message = err instanceof SlopenvError ? err.message : ((err as Error)?.message ?? String(err));
+      ctx.err(`slopenv: ${rule.name} (${tilde(rule.dir)}) — ${message}\n`);
+      continue;
+    }
     try {
-      const { value, changed } = fetchAndCache(ctx, rule);
+      const { changed } = cache(ctx, rule, result.value);
       pulled.push(rule);
-      ctx.out(`  ${changed ? "pulled   " : "unchanged"}  ${rule.name} (${tilde(rule.dir)})  ${maskSecret(value)}\n`);
+      ctx.out(`  ${changed ? "pulled   " : "unchanged"}  ${rule.name} (${tilde(rule.dir)})  ${maskSecret(result.value)}\n`);
     } catch (err) {
       failed.push(rule);
-      const message = err instanceof SlopenvError ? err.message : ((err as Error).message ?? String(err));
-      ctx.err(`slopenv: ${rule.name} (${tilde(rule.dir)}) — ${message}\n`);
+      ctx.err(`slopenv: ${rule.name} (${tilde(rule.dir)}) — ${(err as Error).message}\n`);
     }
   }
 
