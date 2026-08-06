@@ -1,7 +1,7 @@
 {
   "name": "slopenv",
-  "version": "0.5.0",
-  "description": "direnv, but the config lives outside the repo and secrets live in the OS keychain",
+  "version": "0.6.0",
+  "description": "direnv, but the config lives outside the repo and secrets live in the OS secret store",
   "type": "module",
   "private": true,
   "scripts": {

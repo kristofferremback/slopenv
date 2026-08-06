@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/kristofferremback/slopenv/actions/workflows/ci.yml/badge.svg)](https://github.com/kristofferremback/slopenv/actions/workflows/ci.yml)
 
-Directory-scoped environment variables. Like direnv, except the config lives outside the repo, so there is no `.envrc` to accidentally commit, and secret values go to the macOS Keychain instead of to disk.
+Directory-scoped environment variables. Like direnv, except the config lives outside the repo, so there is no `.envrc` to accidentally commit, and secret values go to the operating system's secret store instead of to disk.
 
 ```sh
 cd ~/dev/threa
@@ -17,15 +17,30 @@ echo $CLAUDE_CODE_OAUTH_TOKEN    #                          (ejected on leave)
 
 ## Install
 
-macOS only. Secrets live in the Keychain and there is no backend for anything else yet.
+macOS and Linux are supported. macOS stores secrets in the login Keychain. Linux uses the desktop Secret Service through libsecret; GNOME Keyring, KWallet, or KeePassXC's Secret Service integration must be available in your session.
 
 ### From a release
 
 ```sh
-# Apple Silicon (swap arm64 for x64 on Intel)
-curl -fsSL https://github.com/kristofferremback/slopenv/releases/latest/download/slopenv-darwin-arm64.tar.gz | tar xz
-mv slopenv-darwin-arm64 ~/.local/bin/slopenv     # or anywhere on your PATH
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) ASSET=slopenv-darwin-arm64 ;;
+  Darwin-x86_64) ASSET=slopenv-darwin-x64 ;;
+  Linux-aarch64|Linux-arm64) ASSET=slopenv-linux-arm64 ;;
+  Linux-x86_64) ASSET=slopenv-linux-x64 ;;
+  *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+esac
+curl -fsSL "https://github.com/kristofferremback/slopenv/releases/latest/download/$ASSET.tar.gz" | tar xz
+mv "$ASSET" ~/.local/bin/slopenv                 # or anywhere on your PATH
 ```
+
+On Linux, install a Secret Service implementation before storing secrets. For example, on Debian or Ubuntu with GNOME or XFCE:
+
+```sh
+sudo apt install gnome-keyring
+# Log out and back in so the login keyring starts and unlocks with the session.
+```
+
+KDE users can use KWallet, and KeePassXC can provide the same API when **Secret Service Integration** is enabled.
 
 ### From source
 
@@ -357,7 +372,7 @@ A link takes part in this like any other rule. It is matched by its own director
 | --- | --- | --- |
 | Rules (directories, variable names, aliases, links, vault references) | `~/.slopenv/rules.json` | mode `0600`, in a `0700` directory. Override the whole path with `$SLOPENV_CONFIG`. |
 | Non-secret values (`slopenv set`) | the same file, in plain text | This is what `set` means. Use `set --secret` for anything you care about. |
-| Secret values (`slopenv set --secret`) | macOS Keychain | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
+| Secret values (`slopenv set --secret`) | macOS Keychain or Linux Secret Service | Service `slopenv`, account `<dir>::<VAR_NAME>`. Never written to disk by slopenv. |
 | Per-shell state | `$SLOPENV_STATE` in your environment | Base64 JSON. No temp files, nothing shared between shells. |
 
 Nothing is ever written inside your project. There is no `.envrc` equivalent, so there is nothing to `.gitignore` and nothing to leak in a commit.
@@ -376,23 +391,27 @@ Secret values never touch disk in plaintext, never appear in `rules.json`, and n
 
 ### Process arguments
 
-slopenv writes to the keychain by feeding commands to `security -i` on stdin, so the secret does not appear in any process's argument list. The exception is a value containing a literal newline: `security -i` is line-based, so those fall back to passing the value as an argument, where `ps` could see it for a few milliseconds. macOS only shows argument lists to the same user, and to root.
+On macOS, slopenv writes to the keychain by feeding commands to `security -i` on stdin, so the secret does not appear in any process's argument list. The exception is a value containing a literal newline: `security -i` is line-based, so those fall back to passing the value as an argument, where `ps` could see it for a few milliseconds. macOS only shows argument lists to the same user, and to root.
+
+On Linux, slopenv calls `Bun.secrets` in-process. Bun talks to Secret Service through libsecret, so there is no helper-process argument list.
 
 ### `$SLOPENV_STATE` holds secrets
 
 To restore what your shell had before slopenv touched a variable, that previous value has to be remembered somewhere, and it lives in `$SLOPENV_STATE`. It is per-shell and never written to disk, but it is in your environment, as is the injected variable itself. Anything that can read your environment can read your injected secrets. The same is true of direnv and of plain `export`.
 
-### Keychain access
+### Secret-store access
 
-slopenv shells out to `/usr/bin/security` rather than using an in-process keychain API. This was measured rather than assumed. macOS binds a keychain item's ACL to the *creating binary's code signature*, and a self-compiled `slopenv` is ad-hoc signed, so its identity changes on every build.
+On macOS, slopenv shells out to `/usr/bin/security` rather than using an in-process keychain API. This was measured rather than assumed. macOS binds a keychain item's ACL to the *creating binary's code signature*, and a self-compiled `slopenv` is ad-hoc signed, so its identity changes on every build.
 
 Writing a secret with `Bun.secrets` from one build and reading it from the next produces `errSecUserCanceled (-128)`, which is a modal permission dialog. Running the same code with `bun run` instead of the compiled binary hangs on that dialog indefinitely. For something invoked on `cd`, that means a popup blocking your shell after every `bun run build`. `/usr/bin/security` is Apple-signed and stable, so slopenv's entries stay readable across rebuilds without prompting.
 
-If slopenv were ever signed with a stable Developer ID, an in-process API would become the better choice: faster, byte-exact, and cross-platform for free.
+Linux has no per-binary Secret Service ACL, so it does not have that rebuild problem. The Linux backend uses `Bun.secrets`, which calls libsecret asynchronously and works with any `org.freedesktop.secrets` provider. If no provider is running, slopenv fails with setup advice rather than falling back to plaintext.
+
+If slopenv were ever signed with a stable Developer ID, the in-process API would become the better choice on macOS too.
 
 ### Other platforms
 
-There is no Linux backend yet. Rather than fall back to plaintext, `set --secret` fails with `no keychain backend for this platform`. `Bun.secrets` would be a good fit there, since Linux uses libsecret, which has no per-binary ACL and so none of the problem above. It can drop into the `SecretStore` interface.
+Windows has no backend yet. Secret operations fail rather than falling back to plaintext.
 
 ## How it works
 
@@ -433,15 +452,16 @@ The test suite runs 16 concurrent writers and checks that all 16 rules survive.
 ## Development
 
 ```sh
-bun test                          # 298 tests
-SLOPENV_KEYCHAIN_IT=1 bun test    # 308, incl. 10 against your real login keychain
+bun test
+SLOPENV_KEYCHAIN_IT=1 bun test    # macOS: exercise the real login Keychain
+SLOPENV_SECRET_STORE_IT=1 bun test # Linux: exercise the session's Secret Service
 bunx tsc --noEmit
 bun run build
 ```
 
 `SLOPENV_LOG=1` traces to stderr: which rule won, whether the keychain was hit.
 
-CI runs the suite, a typecheck and a binary smoke test on macOS for every push. Pushing a `v*` tag builds both macOS architectures and attaches them to a GitHub release with `SHA256SUMS`. The workflow refuses to publish if the tag and `package.json` version disagree, since `slopenv --version` reads the latter.
+CI runs the suite, a typecheck, and a native binary smoke test on macOS and Linux for every push. Pushing a `v*` tag builds arm64 and x64 binaries for both operating systems and attaches them to a GitHub release with `SHA256SUMS`. The workflow refuses to publish if the tag and `package.json` version disagree, since `slopenv --version` reads the latter.
 
 The suite covers path matching (nesting, sibling prefixes, symlinks), the diff and restore semantics (enter, leave, re-enter, nested override, pre-existing value), shell quoting of 19 hostile values against real zsh and real bash, the rules-file round trip, lock behaviour, and an end-to-end zsh session that `cd`s around and reads the environment back, including checks on how many times the binary was spawned. Completion is tested by driving an interactive zsh through a pty and pressing TAB, since a completion script that loads is not the same as one that works. `update` is tested end to end against a fake release served from a local HTTP server, including a corrupted download and a missing checksum file, so the failure paths are exercised without the network.
 

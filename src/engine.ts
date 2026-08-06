@@ -62,7 +62,7 @@ function pullOverdue(rule: Rule, now: number): string | null {
  * holds nothing is desired, so everything active takes the ordinary leave-scope
  * path and the shell's own values come back. Leaving the paused directory ends it.
  */
-export function computePlan(input: PlanInput): Plan {
+export async function computePlan(input: PlanInput): Promise<Plan> {
   const { rules, pwd, prevState, env, store, rev } = input;
   const now = input.now ?? Date.now();
 
@@ -115,13 +115,13 @@ export function computePlan(input: PlanInput): Plan {
       // itself is never invoked here: it costs hundreds of milliseconds, needs the
       // network, and can raise a biometric prompt — none of which belongs on a
       // path that runs on every `cd`. `slopenv pull` is what fills this cache.
-      value = store.get(holder.dir, name);
+      value = await store.get(holder.dir, name);
       if (value === null) {
         warnings.push(
           holder.source === "vault"
             ? `${name} (${holder.dir}) has no cached value yet — skipping. ` +
                 `Pull it with: slopenv pull ${name} ${holder.dir}`
-            : `no keychain entry for ${name} (${holder.dir}) — skipping. ` +
+            : `no secret-store entry for ${name} (${holder.dir}) — skipping. ` +
                 `Re-add it with: slopenv set --secret ${name} ${holder.dir}`,
         );
         // Fall through to deactivation: better an honest unset than a stale value.

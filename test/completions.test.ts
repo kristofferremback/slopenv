@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { shellQuote } from "../src/shell.ts";
-import { cleanup, harness, tempDir, runSync } from "./helpers.ts";
+import { cleanup, harness, tempDir, runAsync } from "./helpers.ts";
 
 const CLI = join(import.meta.dir, "..", "src", "cli.ts");
 
@@ -10,53 +10,53 @@ let root: string;
 let rulesPath: string;
 let proj: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   root = realpathSync(tempDir());
   rulesPath = join(root, "rules.json");
   proj = join(root, "proj");
   mkdirSync(join(proj, "apps"), { recursive: true });
 
   const h = harness({ rulesPath, cwd: proj, env: {} });
-  runSync(["set", "NODE_ENV=development", proj], h.ctx);
-  runSync(["set", "PORT=3000", join(proj, "apps")], h.ctx);
-  runSync(["set", "FULL_NAME=Kris R", proj], h.ctx);
+  await runAsync(["set", "NODE_ENV=development", proj], h.ctx);
+  await runAsync(["set", "PORT=3000", join(proj, "apps")], h.ctx);
+  await runAsync(["set", "FULL_NAME=Kris R", proj], h.ctx);
 });
 
 afterAll(() => cleanup(root));
 
-function cli(args: string[]): { code: number; stdout: string } {
+async function cli(args: string[]): Promise<{ code: number; stdout: string }> {
   const h = harness({ rulesPath, cwd: proj, env: {} });
-  const code = runSync(args, h.ctx);
+  const code = await runAsync(args, h.ctx);
   return { code, stdout: h.stdout() };
 }
 
 describe("the lists completion reads", () => {
-  test("--names is one variable per line, sorted and deduplicated", () => {
-    expect(cli(["list", "--names"]).stdout).toBe("FULL_NAME\nNODE_ENV\nPORT\n");
+  test("--names is one variable per line, sorted and deduplicated", async () => {
+    expect((await cli(["list", "--names"])).stdout).toBe("FULL_NAME\nNODE_ENV\nPORT\n");
   });
 
-  test("--dirs is one directory per line, sorted and deduplicated", () => {
+  test("--dirs is one directory per line, sorted and deduplicated", async () => {
     // NODE_ENV and FULL_NAME share a directory; it must appear once.
-    expect(cli(["list", "--dirs"]).stdout).toBe(`${proj}\n${join(proj, "apps")}\n`);
+    expect((await cli(["list", "--dirs"])).stdout).toBe(`${proj}\n${join(proj, "apps")}\n`);
   });
 
-  test("neither reads the keychain, so both stay fast enough for a TAB press", () => {
+  test("neither reads the keychain, so both stay fast enough for a TAB press", async () => {
     const h = harness({ rulesPath, cwd: proj, env: {} });
-    runSync(["set", "--secret", "SECRET_ONE=v", proj], h.ctx);
+    await runAsync(["set", "--secret", "SECRET_ONE=v", proj], h.ctx);
     h.store.reads.length = 0;
 
-    runSync(["list", "--names"], h.ctx);
-    runSync(["list", "--dirs"], h.ctx);
+    await runAsync(["list", "--names"], h.ctx);
+    await runAsync(["list", "--dirs"], h.ctx);
     expect(h.store.reads).toEqual([]);
 
-    runSync(["rm", "SECRET_ONE", proj], h.ctx);
+    await runAsync(["rm", "SECRET_ONE", proj], h.ctx);
   });
 
-  test("an empty rule set produces empty output rather than a message", () => {
+  test("an empty rule set produces empty output rather than a message", async () => {
     const empty = join(root, "empty.json");
     writeFileSync(empty, JSON.stringify({ version: 1, rules: [] }));
     const h = harness({ rulesPath: empty, cwd: proj, env: {} });
-    runSync(["list", "--names"], h.ctx);
+    await runAsync(["list", "--names"], h.ctx);
     expect(h.stdout()).toBe("");
   });
 });
@@ -81,19 +81,19 @@ describe("the generated scripts", () => {
     return { ok: proc.exitCode === 0, stderr: proc.stderr.toString() };
   }
 
-  test("the zsh completion is valid zsh", () => {
+  test("the zsh completion is valid zsh", async () => {
     const result = parses("zsh", generated(["completions", "zsh"]));
     expect(result.stderr).toBe("");
     expect(result.ok).toBe(true);
   });
 
-  test("the bash completion is valid bash", () => {
+  test("the bash completion is valid bash", async () => {
     const result = parses("bash", generated(["completions", "bash"]));
     expect(result.stderr).toBe("");
     expect(result.ok).toBe(true);
   });
 
-  test("the hooks embed them, so one line in ~/.zshrc gets both", () => {
+  test("the hooks embed them, so one line in ~/.zshrc gets both", async () => {
     const zsh = generated(["hook", "zsh"]);
     expect(zsh).toContain("compdef _slopenv slopenv");
     expect(parses("zsh", zsh).ok).toBe(true);
@@ -105,12 +105,12 @@ describe("the generated scripts", () => {
     expect(parses("bash", bash).ok).toBe(true);
   });
 
-  test("registering is guarded, since compdef does not exist before compinit", () => {
+  test("registering is guarded, since compdef does not exist before compinit", async () => {
     // An error inside the `eval` at shell startup is a bad way to discover this.
     expect(generated(["completions", "zsh"])).toContain("$+functions[compdef]");
   });
 
-  test("an unsupported shell is refused", () => {
+  test("an unsupported shell is refused", async () => {
     const proc = Bun.spawnSync(["bun", CLI, "completions", "fish"], { stdout: "pipe", stderr: "pipe" });
     expect(proc.exitCode).toBe(1);
     expect(proc.stderr.toString()).toContain("expected zsh or bash");
@@ -125,7 +125,7 @@ describe("the generated scripts", () => {
 describe("pressing TAB in a real zsh", () => {
   let zdotdir: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     zdotdir = join(root, "zdot");
     mkdirSync(zdotdir, { recursive: true });
 
@@ -159,9 +159,14 @@ describe("pressing TAB in a real zsh", () => {
 
   /** Type `keys`, press TAB, and return what the terminal showed. */
   function pressTab(keys: string): string {
+    const command = "zsh -i";
+    const pty =
+      process.platform === "darwin"
+        ? `script -q /dev/null ${command}`
+        : `script -qefc ${shellQuote(command)} /dev/null`;
     const script =
       `( sleep 1.5; printf '${keys}\\t'; sleep 2; printf '\\003'; sleep 0.4; printf 'exit\\r' )` +
-      ` | script -q /dev/null zsh -i 2>&1`;
+      ` | ${pty} 2>&1`;
     const proc = Bun.spawnSync(["/bin/sh", "-c", script], {
       env: { ...process.env, ZDOTDIR: zdotdir },
       cwd: proj,
@@ -176,22 +181,22 @@ describe("pressing TAB in a real zsh", () => {
       .replace(/\[[0-9;?]*[a-zA-Z]/g, "");
   }
 
-  test("a partial command completes", () => {
+  test("a partial command completes", async () => {
     expect(pressTab("slopenv se")).toContain("slopenv set");
   }, 30_000);
 
-  test("`rm` offers the variables actually registered, not a hardcoded list", () => {
+  test("`rm` offers the variables actually registered, not a hardcoded list", async () => {
     const output = pressTab("slopenv rm ");
     expect(output).toContain("FULL_NAME");
     expect(output).toContain("NODE_ENV");
     expect(output).toContain("PORT");
   }, 30_000);
 
-  test("a partial variable name completes to the real one", () => {
+  test("a partial variable name completes to the real one", async () => {
     expect(pressTab("slopenv rm PO")).toContain("slopenv rm PORT");
   }, 30_000);
 
-  test("`hook` offers the shells it supports", () => {
+  test("`hook` offers the shells it supports", async () => {
     const output = pressTab("slopenv hook ");
     expect(output).toContain("zsh");
     expect(output).toContain("bash");

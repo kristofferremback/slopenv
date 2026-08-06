@@ -154,7 +154,11 @@ describe("the confirmation prompt (real pty)", () => {
 
   function answer(reply: string, args: string): string {
     const inner = `${shellQuote(process.execPath)} ${shellQuote(CLI)} ${args}`;
-    const script = `( sleep 1.2; printf '${reply}\\n'; sleep 0.6 ) | script -q /dev/null ${inner} 2>&1`;
+    const pty =
+      process.platform === "darwin"
+        ? `script -q /dev/null ${inner}`
+        : `script -qefc ${shellQuote(inner)} /dev/null`;
+    const script = `( sleep 1.2; printf '${reply}\\n'; sleep 0.6 ) | ${pty} 2>&1`;
     const proc = Bun.spawnSync(["/bin/sh", "-c", script], {
       env: { ...process.env, SLOPENV_CONFIG: rulesPath },
       cwd: proj,

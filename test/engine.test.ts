@@ -36,8 +36,8 @@ class FakeShell {
     this.rev = rev;
   }
 
-  cd(pwd: string): void {
-    const plan = computePlan({
+  async cd(pwd: string): Promise<void> {
+    const plan = await computePlan({
       rules: this.rules,
       pwd,
       prevState: decodeState(this.env[STATE_VAR]),
@@ -63,187 +63,187 @@ describe("inject and eject", () => {
     store = new MemorySecretStore({ [accountFor(WORK, "TOKEN")]: "work-token" });
   });
 
-  test("entering exports, leaving unsets", () => {
+  test("entering exports, leaving unsets", async () => {
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
 
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.env.TOKEN).toBeUndefined();
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
 
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.env.TOKEN).toBeUndefined();
     expect(shell.lastStatements).toEqual(["unset TOKEN"]);
   });
 
-  test("a subdirectory inherits without re-reading the keychain", () => {
+  test("a subdirectory inherits without re-reading the keychain", async () => {
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(store.reads.length).toBe(1);
 
-    shell.cd(APPS);
+    await shell.cd(APPS);
     expect(shell.env.TOKEN).toBe("work-token");
     expect(shell.lastStatements).toEqual([]);
     // The whole point of caching in SLOPENV_STATE: no keychain call on this cd.
     expect(store.reads.length).toBe(1);
 
-    shell.cd(`${APPS}/web/src`);
+    await shell.cd(`${APPS}/web/src`);
     expect(store.reads.length).toBe(1);
   });
 
-  test("re-entering after leaving reads the keychain again", () => {
+  test("re-entering after leaving reads the keychain again", async () => {
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
-    shell.cd(WORK);
-    shell.cd("/dev");
-    shell.cd(WORK);
+    await shell.cd(WORK);
+    await shell.cd("/dev");
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
     expect(store.reads.length).toBe(2);
   });
 
-  test("a nested rule overrides its ancestor, and the ancestor comes back on the way out", () => {
+  test("a nested rule overrides its ancestor, and the ancestor comes back on the way out", async () => {
     store.set(APPS, "TOKEN", "apps-token");
     const shell = new FakeShell([secret(WORK, "TOKEN"), secret(APPS, "TOKEN")], store);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
 
-    shell.cd(APPS);
+    await shell.cd(APPS);
     expect(shell.env.TOKEN).toBe("apps-token");
     expect(shell.state.active.TOKEN?.dir).toBe(APPS);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
 
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.env.TOKEN).toBeUndefined();
   });
 
-  test("a pre-existing shell value is remembered and restored on leave", () => {
+  test("a pre-existing shell value is remembered and restored on leave", async () => {
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
     shell.env.TOKEN = "value-from-my-zshrc";
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
     expect(shell.state.active.TOKEN?.prev).toBe("value-from-my-zshrc");
 
-    shell.cd(APPS);
+    await shell.cd(APPS);
     // Still ours; the remembered original must not be overwritten with our value.
     expect(shell.state.active.TOKEN?.prev).toBe("value-from-my-zshrc");
 
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.env.TOKEN).toBe("value-from-my-zshrc");
     expect(shell.lastStatements).toEqual([`export TOKEN='value-from-my-zshrc'`]);
   });
 
-  test("the pre-existing value survives a nested override", () => {
+  test("the pre-existing value survives a nested override", async () => {
     store.set(APPS, "TOKEN", "apps-token");
     const shell = new FakeShell([secret(WORK, "TOKEN"), secret(APPS, "TOKEN")], store);
     shell.env.TOKEN = "original";
 
-    shell.cd(WORK);
-    shell.cd(APPS);
+    await shell.cd(WORK);
+    await shell.cd(APPS);
     expect(shell.env.TOKEN).toBe("apps-token");
-    shell.cd("/tmp");
+    await shell.cd("/tmp");
     expect(shell.env.TOKEN).toBe("original");
   });
 
-  test("an empty pre-existing value is not confused with an absent one", () => {
+  test("an empty pre-existing value is not confused with an absent one", async () => {
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
     shell.env.TOKEN = "";
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.state.active.TOKEN?.prev).toBe("");
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.env.TOKEN).toBe("");
     expect(shell.lastStatements).toEqual([`export TOKEN=''`]);
   });
 
-  test("several variables activate and deactivate independently", () => {
+  test("several variables activate and deactivate independently", async () => {
     const shell = new FakeShell(
       [secret(WORK, "TOKEN"), plain(WORK, "NODE_ENV", "development"), plain(APPS, "PORT", "3000")],
       store,
     );
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
     expect(shell.env.NODE_ENV).toBe("development");
     expect(shell.env.PORT).toBeUndefined();
 
-    shell.cd(APPS);
+    await shell.cd(APPS);
     expect(shell.lastStatements).toEqual([`export PORT='3000'`]);
 
-    shell.cd("/dev");
+    await shell.cd("/dev");
     expect(shell.lastStatements).toEqual(["unset NODE_ENV", "unset PORT", "unset TOKEN"]);
   });
 });
 
 describe("keychain misses", () => {
-  test("a rule with no keychain entry warns and is skipped, not left half-applied", () => {
+  test("a rule with no secret-store entry warns and is skipped, not left half-applied", async () => {
     const store = new MemorySecretStore();
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBeUndefined();
     expect(shell.lastStatements).toEqual([]);
-    expect(shell.lastWarnings[0]).toContain("no keychain entry for TOKEN");
+    expect(shell.lastWarnings[0]).toContain("no secret-store entry for TOKEN");
   });
 
-  test("a secret that disappears while active is ejected rather than left stale", () => {
+  test("a secret that disappears while active is ejected rather than left stale", async () => {
     const store = new MemorySecretStore({ [accountFor(WORK, "TOKEN")]: "work-token" });
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("work-token");
 
     store.remove(WORK, "TOKEN");
     shell.setRules([secret(WORK, "TOKEN")], "rev-2"); // rules changed -> re-resolve
 
-    shell.cd(APPS);
+    await shell.cd(APPS);
     expect(shell.env.TOKEN).toBeUndefined();
-    expect(shell.lastWarnings[0]).toContain("no keychain entry");
+    expect(shell.lastWarnings[0]).toContain("no secret-store entry");
   });
 });
 
 describe("rules changing underneath a live shell", () => {
-  test("a new rev re-resolves values that are already active", () => {
+  test("a new rev re-resolves values that are already active", async () => {
     const store = new MemorySecretStore({ [accountFor(WORK, "TOKEN")]: "old" });
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("old");
 
     // Another terminal changes the secret and touches the rules file.
     store.set(WORK, "TOKEN", "new");
     shell.setRules([secret(WORK, "TOKEN")], "rev-2");
 
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("new");
   });
 
-  test("a rule removed elsewhere is ejected on the next hook run", () => {
+  test("a rule removed elsewhere is ejected on the next hook run", async () => {
     const store = new MemorySecretStore({ [accountFor(WORK, "TOKEN")]: "v" });
     const shell = new FakeShell([secret(WORK, "TOKEN")], store);
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBe("v");
 
     shell.setRules([], "rev-2");
-    shell.cd(WORK);
+    await shell.cd(WORK);
     expect(shell.env.TOKEN).toBeUndefined();
   });
 
-  test("an unchanged rev keeps the fast path even for plain rules", () => {
+  test("an unchanged rev keeps the fast path even for plain rules", async () => {
     const store = new MemorySecretStore();
     const shell = new FakeShell([plain(WORK, "NODE_ENV", "development")], store);
-    shell.cd(WORK);
-    shell.cd(APPS);
+    await shell.cd(WORK);
+    await shell.cd(APPS);
     expect(shell.lastStatements).toEqual([]);
   });
 });
 
 describe("state", () => {
-  test("round-trips through base64", () => {
+  test("round-trips through base64", async () => {
     const state: State = {
       ...emptyState(),
       rev: "1:2:3",
@@ -252,7 +252,7 @@ describe("state", () => {
     expect(decodeState(encodeState(state))).toEqual(state);
   });
 
-  test("survives values that would upset a shell", () => {
+  test("survives values that would upset a shell", async () => {
     const state: State = {
       ...emptyState(),
       rev: "r",
@@ -261,7 +261,7 @@ describe("state", () => {
     expect(decodeState(encodeState(state))).toEqual(state);
   });
 
-  test("garbage decodes to empty rather than throwing", () => {
+  test("garbage decodes to empty rather than throwing", async () => {
     expect(decodeState("not-base64!!!").active).toEqual({});
     expect(decodeState(Buffer.from("[]").toString("base64")).active).toEqual({});
     expect(decodeState(Buffer.from('{"v":99,"active":{}}').toString("base64")).active).toEqual({});
@@ -269,7 +269,7 @@ describe("state", () => {
     expect(decodeState("").active).toEqual({});
   });
 
-  test("malformed entries are dropped, good ones kept", () => {
+  test("malformed entries are dropped, good ones kept", async () => {
     const encoded = Buffer.from(
       JSON.stringify({ v: 1, rev: "r", active: { GOOD: { prev: null, dir: "/a", src: "plain" }, BAD: { prev: 5 } } }),
     ).toString("base64");

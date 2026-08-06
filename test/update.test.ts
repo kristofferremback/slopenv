@@ -39,8 +39,13 @@ describe("asset selection", () => {
     expect(assetNameFor("darwin", "x64")).toBe("slopenv-darwin-x64.tar.gz");
   });
 
+  test("picks Linux builds too", () => {
+    expect(assetNameFor("linux", "arm64")).toBe("slopenv-linux-arm64.tar.gz");
+    expect(assetNameFor("linux", "x64")).toBe("slopenv-linux-x64.tar.gz");
+  });
+
   test("refuses platforms and architectures nothing is published for", () => {
-    expect(() => assetNameFor("linux", "x64")).toThrow(/only ships macOS/);
+    expect(() => assetNameFor("win32", "x64")).toThrow(/macOS and Linux/);
     expect(() => assetNameFor("darwin", "ppc")).toThrow(/arm64 and x64/);
   });
 });

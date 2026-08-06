@@ -16,26 +16,26 @@ import { VERSION } from "./version.ts";
 
 export { VERSION } from "./version.ts";
 
-const HELP = `slopenv ${VERSION} — directory-scoped environment variables, with secrets in the OS keychain
+const HELP = `slopenv ${VERSION} — directory-scoped environment variables, with secrets in the OS secret store
 
 usage: slopenv <command> [args]
 
   set NAME[=VALUE] [DIR]          add a rule for a non-secret value, in the rules
                                   file (asks first if it looks like a credential)
-  set --secret NAME[=VALUE] [DIR] store the value in the keychain instead
+  set --secret NAME[=VALUE] [DIR] store the value in the OS secret store instead
                                   (omit =VALUE to be prompted, hidden, off the record)
   link NAME --from SRCDIR [DIR]   apply a value you already have in SRCDIR to
                                   another directory, without copying it
-  pull NAME --ref REF [DIR]       fetch a value from 1Password and cache it in the
-                                  keychain (\`pull --all\` re-fetches every one;
+  pull NAME --ref REF [DIR]       fetch a value from 1Password and cache it in the OS
+                                  secret store (\`pull --all\` re-fetches every one;
                                   \`--plain\` keeps it in the rules file instead)
-  rm NAME [DIR]                   remove a rule, and its keychain entry if it had one
+  rm NAME [DIR]                   remove a rule and its secret-store entry if present
   off                             unload slopenv's variables in this shell only,
                                   until you \`slopenv on\` or leave the directory
   on                              load them again without waiting to leave
   list                            show every rule (secret values are masked)
   status [DIR]                    show what applies in a directory and which rule wins
-  doctor                          check the hook, the rules file and the keychain
+  doctor                          check the hook, rules file, and OS secret store
   update [--check]                update to the latest release from GitHub
   edit                            open the rules file in $EDITOR
   hook <zsh|bash> [--simple]      print the shell hook
@@ -49,7 +49,7 @@ common flags:
   --ref REF       a secret reference, e.g. "op://Work/Claude Code/credential"
   --ttl 30d       how long before \`pull\` says a cached value is overdue
   --plain         keep the value in the rules file, in the clear
-  --secret        keep it in the keychain instead
+  --secret        keep it in the OS secret store instead
                   (\`set\` defaults to --plain, \`pull\` to --secret)
   --alias TEXT    a human label shown by \`list\`, e.g. "Claude Code for work"
   --yes, -y       skip the confirmation when \`set\` thinks a value is a credential
@@ -66,7 +66,7 @@ examples:
   slopenv link GITHUB_TOKEN --from ~/dev/oss     # same value, one more directory
   slopenv off                                    # this shell only, ends when you leave
   slopenv pull GITHUB_TOKEN --ref "op://Work/GitHub/token"
-  slopenv pull --all                             # rebuild the keychain on a new machine
+  slopenv pull --all                             # rebuild the secret store on a new machine
   slopenv pull NOTION_USER --ref "op://Employee/Notion/Username" --plain
 
 DIR covers itself and everything under it. When two rules define the same
@@ -75,7 +75,7 @@ variable, the deeper directory wins.
 \`link\` borrows rather than copies: the value stays in one place, so changing it
 there changes it everywhere it is linked.
 
-\`pull\` keeps the reference in the rules file and the value in the keychain, so the
+\`pull\` keeps the reference in the rules file and the value in the OS secret store, so the
 vault is never consulted on a \`cd\` — only when you pull. Not everything in a
 vault is a secret, so \`--plain\` keeps the value in the rules file instead, in the
 clear, and asks first if it looks like a credential.
@@ -149,7 +149,7 @@ export function run(argv: readonly string[], ctx: Context): number | Promise<num
     const replacement = RENAMED[command];
     if (replacement) {
       ctx.err(`slopenv: \`${command}\` is now \`${replacement}\`.\n`);
-      ctx.err(`  Same behaviour, one spelling: the value goes to the keychain either way.\n`);
+      ctx.err(`  Same behaviour, one spelling: the value goes to the OS secret store either way.\n`);
       return 1;
     }
     ctx.err(`slopenv: unknown command ${JSON.stringify(command)}\n`);

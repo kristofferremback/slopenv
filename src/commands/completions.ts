@@ -16,15 +16,15 @@ import { fail } from "../errors.ts";
  */
 
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ["set", "add a rule for a value (--secret keeps it in the keychain)"],
+  ["set", "add a rule for a value (--secret keeps it in the OS secret store)"],
   ["link", "apply a value you already have elsewhere to another directory"],
-  ["pull", "fetch a value from 1Password and keep it in the keychain"],
-  ["rm", "remove a rule, and its keychain entry if it had one"],
+  ["pull", "fetch a value from 1Password and keep it in the OS secret store"],
+  ["rm", "remove a rule and its secret-store entry if present"],
   ["off", "unload the variables in this shell only, until you leave or turn it on"],
   ["on", "load them again after turning them off"],
   ["list", "show every rule"],
   ["status", "show what applies in a directory and which rule wins"],
-  ["doctor", "check the hook, the rules file and the keychain"],
+  ["doctor", "check the hook, rules file, and OS secret store"],
   ["edit", "open the rules file in \\$EDITOR"],
   ["hook", "print the shell hook"],
   ["completions", "print the shell completion script"],
@@ -76,7 +76,7 @@ ${described}
             '--dir[directory the rule applies to]:directory:_slopenv_ruledirs' \\
             '--value[value to store]:value:' \\
             '--alias[human label shown by list]:alias:' \\
-            '(--plain)--secret[keep the value in the keychain]' \\
+            '(--plain)--secret[keep the value in the OS secret store]' \\
             '(--secret)--plain[keep the value in the rules file, in the clear]' \\
             '(-y --yes -f --force)'{-y,--yes,-f,--force}'[skip the credential confirmation]' \\
             '1:variable (NAME or NAME=VALUE):_slopenv_names' \\
@@ -99,7 +99,7 @@ ${described}
             '--engine[which vault resolves the reference]:engine:(1password)' \\
             '--all[re-fetch every reference you have]' \\
             '(--secret)--plain[keep the value in the rules file, in the clear]' \\
-            '(--plain)--secret[move the value back into the keychain]' \\
+            '(--plain)--secret[move the value back into the OS secret store]' \\
             '(-y --yes -f --force)'{-y,--yes,-f,--force}'[skip the plain-text confirmation]' \\
             '1:variable:_slopenv_names' \\
             '2:directory:_slopenv_ruledirs'

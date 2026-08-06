@@ -6,7 +6,7 @@ import { effectiveRule, linksTo, loadRules, parseRules, RULES_VERSION, serialize
 import { accountFor } from "../src/secrets/index.ts";
 import { MemorySecretStore } from "../src/secrets/memory.ts";
 import { emptyState } from "../src/state.ts";
-import { applyStatements, cleanup, harness, runSync, tempDir, type Harness } from "./helpers.ts";
+import { applyStatements, cleanup, harness, runAsync, tempDir, type Harness } from "./helpers.ts";
 
 let root: string;
 let rulesPath: string;
@@ -30,9 +30,9 @@ beforeEach(() => {
 
 afterEach(() => cleanup(root));
 
-function cli(...argv: string[]): number {
+async function cli(...argv: string[]): Promise<number> {
   h.reset();
-  return runSync(argv, h.ctx);
+  return await runAsync(argv, h.ctx);
 }
 
 function rules(): Rule[] {
@@ -44,163 +44,163 @@ function ruleFor(dir: string, name: string): Rule | undefined {
 }
 
 describe("slopenv link", () => {
-  test("adds a rule in the current directory that borrows from another one", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    expect(cli("link", "TOKEN", "--from", threa)).toBe(0);
+  test("adds a rule in the current directory that borrows from another one", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    expect(await cli("link", "TOKEN", "--from", threa)).toBe(0);
 
     expect(ruleFor(web, "TOKEN")).toEqual({ dir: web, name: "TOKEN", source: "link", target: threa });
     expect(h.stdout()).toContain(`TOKEN -> ${threa}`);
   });
 
-  test("the value is borrowed, not copied — the keychain gains no second entry", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
+  test("the value is borrowed, not copied — the keychain gains no second entry", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
 
     expect([...h.store.entries.keys()]).toEqual([accountFor(threa, "TOKEN")]);
   });
 
-  test("a directory argument works the same way `set` takes one", () => {
-    cli("set", "NODE_ENV=development", threa);
-    expect(cli("link", "NODE_ENV", "--from", threa, apps)).toBe(0);
+  test("a directory argument works the same way `set` takes one", async () => {
+    await cli("set", "NODE_ENV=development", threa);
+    expect(await cli("link", "NODE_ENV", "--from", threa, apps)).toBe(0);
     expect(ruleFor(apps, "NODE_ENV")?.source).toBe("link");
   });
 
-  test("--dir is accepted in place of the positional", () => {
-    cli("set", "NODE_ENV=development", threa);
-    cli("link", "NODE_ENV", "--from", threa, "--dir", apps);
+  test("--dir is accepted in place of the positional", async () => {
+    await cli("set", "NODE_ENV=development", threa);
+    await cli("link", "NODE_ENV", "--from", threa, "--dir", apps);
     expect(ruleFor(apps, "NODE_ENV")?.source).toBe("link");
   });
 
-  test("--from takes any directory the source rule covers, and records the rule's own", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
+  test("--from takes any directory the source rule covers, and records the rule's own", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
     // The rule lives in threa; apps merely inherits it.
-    cli("link", "TOKEN", "--from", apps);
+    await cli("link", "TOKEN", "--from", apps);
     expect(ruleFor(web, "TOKEN")?.target).toBe(threa);
   });
 
-  test("linking to a link is flattened to the real rule, so links never chain", () => {
+  test("linking to a link is flattened to the real rule, so links never chain", async () => {
     const third = join(root, "threa-docs");
     mkdirSync(third);
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
     // web is now a link; borrowing from it must land on threa, not on web.
-    cli("link", "TOKEN", "--from", web, third);
+    await cli("link", "TOKEN", "--from", web, third);
 
     expect(ruleFor(third, "TOKEN")?.target).toBe(threa);
   });
 
-  test("refuses when the source directory has no rule for that variable", () => {
-    expect(() => cli("link", "TOKEN", "--from", threa)).toThrow(/no rule for TOKEN/);
+  test("refuses when the source directory has no rule for that variable", async () => {
+    await expect(cli("link", "TOKEN", "--from", threa)).rejects.toThrow(/no rule for TOKEN/);
   });
 
-  test("refuses without --from rather than guessing", () => {
-    cli("set", "TOKEN=v", threa);
-    expect(() => cli("link", "TOKEN")).toThrow(/--from/);
+  test("refuses without --from rather than guessing", async () => {
+    await cli("set", "TOKEN=v", threa);
+    await expect(cli("link", "TOKEN")).rejects.toThrow(/--from/);
   });
 
-  test("refuses to link a directory to a value it already holds", () => {
-    cli("set", "TOKEN=v", threa);
-    expect(() => cli("link", "TOKEN", "--from", threa, threa)).toThrow(/already lives/);
+  test("refuses to link a directory to a value it already holds", async () => {
+    await cli("set", "TOKEN=v", threa);
+    await expect(cli("link", "TOKEN", "--from", threa, threa)).rejects.toThrow(/already lives/);
   });
 
-  test("says so when the source rule already covers the target directory", () => {
-    cli("set", "TOKEN=v", threa);
-    expect(cli("link", "TOKEN", "--from", threa, apps)).toBe(0);
+  test("says so when the source rule already covers the target directory", async () => {
+    await cli("set", "TOKEN=v", threa);
+    expect(await cli("link", "TOKEN", "--from", threa, apps)).toBe(0);
     expect(h.stderr()).toContain("already covers");
   });
 
-  test("--alias labels the link; without one it shows the borrowed label", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa, "--alias", "Claude Code for work");
-    cli("link", "TOKEN", "--from", threa);
+  test("--alias labels the link; without one it shows the borrowed label", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa, "--alias", "Claude Code for work");
+    await cli("link", "TOKEN", "--from", threa);
     expect(ruleFor(web, "TOKEN")?.alias).toBeUndefined();
 
-    cli("list");
+    await cli("list");
     expect(h.stdout()).toContain("Claude Code for work");
 
-    cli("link", "TOKEN", "--from", threa, "--alias", "the web one");
+    await cli("link", "TOKEN", "--from", threa, "--alias", "the web one");
     expect(ruleFor(web, "TOKEN")?.alias).toBe("the web one");
   });
 
-  test("replacing a keychain rule with a link deletes the orphaned keychain entry", () => {
-    cli("set", "--secret", "TOKEN=shared", threa);
-    cli("set", "--secret", "TOKEN=its-own", web);
+  test("replacing a keychain rule with a link deletes the orphaned keychain entry", async () => {
+    await cli("set", "--secret", "TOKEN=shared", threa);
+    await cli("set", "--secret", "TOKEN=its-own", web);
     expect(h.store.entries.has(accountFor(web, "TOKEN"))).toBe(true);
 
-    cli("link", "TOKEN", "--from", threa);
+    await cli("link", "TOKEN", "--from", threa);
     expect(h.store.entries.has(accountFor(web, "TOKEN"))).toBe(false);
-    expect(h.stderr()).toContain("deleted the keychain entry");
+    expect(h.stderr()).toContain("deleted the secret-store entry");
   });
 
-  test("refuses to turn a rule other links depend on into a link itself", () => {
+  test("refuses to turn a rule other links depend on into a link itself", async () => {
     const third = join(root, "threa-docs");
     mkdirSync(third);
-    cli("set", "TOKEN=v", threa);
-    cli("set", "TOKEN=other", web);
-    cli("link", "TOKEN", "--from", web, third);
+    await cli("set", "TOKEN=v", threa);
+    await cli("set", "TOKEN=other", web);
+    await cli("link", "TOKEN", "--from", web, third);
 
     // web is what `third` borrows from; it cannot become a borrower.
-    expect(() => cli("link", "TOKEN", "--from", threa)).toThrow(/links to TOKEN/);
+    await expect(cli("link", "TOKEN", "--from", threa)).rejects.toThrow(/links to TOKEN/);
     expect(ruleFor(web, "TOKEN")?.source).toBe("plain");
   });
 });
 
 describe("a link in the shell", () => {
-  test("exports the value the target holds", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("export", web);
+  test("exports the value the target holds", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("export", web);
 
     expect(h.stdout()).toContain("export TOKEN='s3cret'");
   });
 
-  test("changing the value at the source changes it everywhere it is linked", () => {
-    cli("set", "--secret", "TOKEN=first", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("set", "--secret", "TOKEN=second", threa);
+  test("changing the value at the source changes it everywhere it is linked", async () => {
+    await cli("set", "--secret", "TOKEN=first", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("set", "--secret", "TOKEN=second", threa);
 
-    cli("export", web);
+    await cli("export", web);
     expect(h.stdout()).toContain("export TOKEN='second'");
   });
 
-  test("a deeper rule still wins over a link, and a link over a shallower rule", () => {
-    cli("set", "TOKEN=root", root);
-    cli("set", "TOKEN=threa", threa);
-    cli("link", "TOKEN", "--from", threa, web);
+  test("a deeper rule still wins over a link, and a link over a shallower rule", async () => {
+    await cli("set", "TOKEN=root", root);
+    await cli("set", "TOKEN=threa", threa);
+    await cli("link", "TOKEN", "--from", threa, web);
     mkdirSync(join(web, "deep"), { recursive: true });
-    cli("set", "TOKEN=deep", join(web, "deep"));
+    await cli("set", "TOKEN=deep", join(web, "deep"));
 
-    cli("export", web);
+    await cli("export", web);
     expect(h.stdout()).toContain("export TOKEN='threa'");
   });
 
-  test("the linked directory is in SLOPENV_DIRS, so the hook's fast path notices it", () => {
-    cli("set", "TOKEN=v", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("export", web);
+  test("the linked directory is in SLOPENV_DIRS, so the hook's fast path notices it", async () => {
+    await cli("set", "TOKEN=v", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("export", web);
 
     const dirs = /export SLOPENV_DIRS='([\s\S]*?)'\n/.exec(h.stdout())?.[1];
     expect(dirs?.split("\n")).toContain(web);
   });
 
-  test("moving between a link and its target re-exports rather than going stale", () => {
-    cli("set", "TOKEN=shared", threa);
-    cli("link", "TOKEN", "--from", threa);
+  test("moving between a link and its target re-exports rather than going stale", async () => {
+    await cli("set", "TOKEN=shared", threa);
+    await cli("link", "TOKEN", "--from", threa);
 
     const env: Record<string, string | undefined> = {};
     const store = new MemorySecretStore();
     const all = rules();
     for (const pwd of [threa, web]) {
-      const plan = computePlan({ rules: all, pwd, prevState: emptyState(), env, store, rev: "r1" });
+      const plan = await computePlan({ rules: all, pwd, prevState: emptyState(), env, store, rev: "r1" });
       applyStatements(env, plan.statements);
       expect(env.TOKEN).toBe("shared");
     }
   });
 
-  test("a link whose target vanished warns and unsets rather than exporting a stale value", () => {
+  test("a link whose target vanished warns and unsets rather than exporting a stale value", async () => {
     // Only reachable by hand-editing, since the rules file refuses to load in this
     // state and `rm` refuses to create it. The engine still has to cope.
     const dangling: Rule[] = [{ dir: web, name: "TOKEN", source: "link", target: threa }];
-    const plan = computePlan({
+    const plan = await computePlan({
       rules: dangling,
       pwd: web,
       prevState: emptyState(),
@@ -213,52 +213,52 @@ describe("a link in the shell", () => {
     expect(plan.warnings[0]).toMatch(/links to .*threa, where there is no rule for it/);
   });
 
-  test("a link to a secret that is gone from the keychain names the directory to fix", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
+  test("a link to a secret that is gone from the keychain names the directory to fix", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
     h.store.entries.clear();
 
-    cli("export", web);
-    expect(h.stderr()).toContain(`no keychain entry for TOKEN (${threa})`);
+    await cli("export", web);
+    expect(h.stderr()).toContain(`no secret-store entry for TOKEN (${threa})`);
     expect(h.stdout()).not.toContain("export TOKEN=");
   });
 });
 
 describe("removing a linked rule", () => {
-  test("refuses while something links to it, and names what does", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
+  test("refuses while something links to it, and names what does", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
 
-    expect(() => cli("rm", "TOKEN", threa)).toThrow(/1 rule links to TOKEN/);
+    await expect(cli("rm", "TOKEN", threa)).rejects.toThrow(/1 rule links to TOKEN/);
     expect(rules()).toHaveLength(2);
     // The refusal must not have taken the keychain entry with it.
     expect(h.store.entries.has(accountFor(threa, "TOKEN"))).toBe(true);
   });
 
-  test("--force removes the rule and every link to it", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("link", "TOKEN", "--from", threa, apps);
+  test("--force removes the rule and every link to it", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("link", "TOKEN", "--from", threa, apps);
 
-    expect(cli("rm", "TOKEN", threa, "--force")).toBe(0);
+    expect(await cli("rm", "TOKEN", threa, "--force")).toBe(0);
     expect(rules()).toEqual([]);
     expect(h.store.entries.size).toBe(0);
     expect(h.stdout()).toContain("2 links to it");
   });
 
-  test("removing the link leaves the value, and the keychain, alone", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
+  test("removing the link leaves the value, and the keychain, alone", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
 
-    expect(cli("rm", "TOKEN", web)).toBe(0);
+    expect(await cli("rm", "TOKEN", web)).toBe(0);
     expect(rules()).toHaveLength(1);
     expect(h.store.entries.has(accountFor(threa, "TOKEN"))).toBe(true);
   });
 
-  test("giving a linked directory its own value says that the link is gone", () => {
-    cli("set", "TOKEN=shared", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("set", "TOKEN=its-own");
+  test("giving a linked directory its own value says that the link is gone", async () => {
+    await cli("set", "TOKEN=shared", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("set", "TOKEN=its-own");
 
     expect(ruleFor(web, "TOKEN")).toEqual({ dir: web, name: "TOKEN", source: "plain", value: "its-own" });
     expect(h.stderr()).toContain(`used to link to ${threa}`);
@@ -266,15 +266,15 @@ describe("removing a linked rule", () => {
 });
 
 describe("links in the rules file", () => {
-  test("a file with a link is written as version 2; one without stays version 1", () => {
-    cli("set", "TOKEN=v", threa);
+  test("a file with a link is written as version 2; one without stays version 1", async () => {
+    await cli("set", "TOKEN=v", threa);
     expect(JSON.parse(readFileSync(rulesPath, "utf8")).version).toBe(1);
 
-    cli("link", "TOKEN", "--from", threa);
+    await cli("link", "TOKEN", "--from", threa);
     expect(JSON.parse(readFileSync(rulesPath, "utf8")).version).toBe(2);
   });
 
-  test("refuses a link that points nowhere", () => {
+  test("refuses a link that points nowhere", async () => {
     const text = JSON.stringify({
       version: 2,
       rules: [{ dir: "/dev/web", name: "TOKEN", source: "link", target: "/dev/threa" }],
@@ -282,7 +282,7 @@ describe("links in the rules file", () => {
     expect(() => parseRules(text)).toThrow(/links TOKEN to \/dev\/threa, where there is no rule/);
   });
 
-  test("refuses a link that points at a rule for a different variable", () => {
+  test("refuses a link that points at a rule for a different variable", async () => {
     const text = JSON.stringify({
       version: 2,
       rules: [
@@ -293,7 +293,7 @@ describe("links in the rules file", () => {
     expect(() => parseRules(text)).toThrow(/where there is no rule for TOKEN/);
   });
 
-  test("refuses a chain of links, which is the only way to build a cycle", () => {
+  test("refuses a chain of links, which is the only way to build a cycle", async () => {
     const text = JSON.stringify({
       version: 2,
       rules: [
@@ -305,7 +305,7 @@ describe("links in the rules file", () => {
     expect(() => parseRules(text)).toThrow(/itself a link/);
   });
 
-  test("refuses the malformed shapes a link can take", () => {
+  test("refuses the malformed shapes a link can take", async () => {
     const cases: [unknown, RegExp][] = [
       [{ dir: "/a", name: "V", source: "link" }, /target must be a non-empty string/],
       [{ dir: "/a", name: "V", source: "link", target: "rel" }, /target must be an absolute path/],
@@ -318,14 +318,14 @@ describe("links in the rules file", () => {
     }
   });
 
-  test("a file from a newer slopenv is refused by name, not by a confusing complaint about `source`", () => {
+  test("a file from a newer slopenv is refused by name, not by a confusing complaint about `source`", async () => {
     // Deliberately relative to the current version: this is about what happens
     // when a build meets a file it is too old for, whatever the numbers are.
     const text = JSON.stringify({ version: RULES_VERSION + 1, rules: [] });
     expect(() => parseRules(text)).toThrow(/written by a newer slopenv/);
   });
 
-  test("round-trips a link", () => {
+  test("round-trips a link", async () => {
     const file = {
       version: 2,
       rules: [
@@ -336,7 +336,7 @@ describe("links in the rules file", () => {
     expect(parseRules(serializeRules(file))).toEqual(file);
   });
 
-  test("effectiveRule follows a link and stops at a real rule", () => {
+  test("effectiveRule follows a link and stops at a real rule", async () => {
     const token = { dir: "/dev/threa", name: "TOKEN", source: "plain", value: "v" } as Rule;
     const link = { dir: "/dev/web", name: "TOKEN", source: "link", target: "/dev/threa" } as Rule;
     expect(effectiveRule([token, link], link)).toBe(token);
@@ -348,41 +348,41 @@ describe("links in the rules file", () => {
 });
 
 describe("links in the output", () => {
-  test("list gains a BORROWS FROM column only when there is a link", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("list");
+  test("list gains a BORROWS FROM column only when there is a link", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("list");
     expect(h.stdout()).not.toContain("BORROWS FROM");
 
-    cli("link", "TOKEN", "--from", threa);
-    cli("list");
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("list");
     expect(h.stdout()).toContain("BORROWS FROM");
     // The borrowed value is shown, masked, on the link's row too.
     expect(h.stdout().split("\n").filter((l) => l.includes("•••"))).toHaveLength(2);
   });
 
-  test("status shows where the value comes from", () => {
-    cli("set", "TOKEN=shared", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("status", web);
+  test("status shows where the value comes from", async () => {
+    await cli("set", "TOKEN=shared", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("status", web);
 
     expect(h.stdout()).toContain("link");
     expect(h.stdout()).toContain(`${web} -> ${threa}`);
     expect(h.stdout()).toContain("shared");
   });
 
-  test("doctor reports each link and what it resolves to", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("doctor");
+  test("doctor reports each link and what it resolves to", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("doctor");
 
     expect(h.stdout()).toContain("links (1)");
     expect(h.stdout()).toContain(`borrows from ${threa} [keychain]`);
   });
 
-  test("list --json carries the target, and still never carries the secret", () => {
-    cli("set", "--secret", "TOKEN=s3cret", threa);
-    cli("link", "TOKEN", "--from", threa);
-    cli("list", "--json");
+  test("list --json carries the target, and still never carries the secret", async () => {
+    await cli("set", "--secret", "TOKEN=s3cret", threa);
+    await cli("link", "TOKEN", "--from", threa);
+    await cli("list", "--json");
 
     const parsed = JSON.parse(h.stdout());
     expect(parsed.rules).toContainEqual({ dir: web, name: "TOKEN", source: "link", target: threa });

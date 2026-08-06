@@ -152,7 +152,7 @@ function confirmPlaintext(ctx: Context, resolved: Resolved, value: string): void
 
   ctx.err(`slopenv: ${describeSuspicion(resolved.name, suspicion)}.\n`);
   ctx.err(`  \`set\` writes it to ${ctx.rulesPath} in plain text.\n`);
-  ctx.err(`  To put it in the keychain instead:  slopenv set --secret ${resolved.name} ${resolved.dir}\n`);
+  ctx.err(`  To put it in the OS secret store instead:  slopenv set --secret ${resolved.name} ${resolved.dir}\n`);
 
   if (!isInteractive()) {
     fail(`refusing to store what looks like a credential in plain text. Pass --yes to override, or use \`set --secret\`.`);
@@ -205,12 +205,12 @@ function describe(rule: Rule, shown: string): string {
  * is the masked form — enough to know which token you are about to overwrite,
  * not enough to be worth having on screen.
  */
-function promptFor(ctx: Context, resolved: Resolved): string {
-  const suffix = currentValue(ctx, resolved);
+async function promptFor(ctx: Context, resolved: Resolved): Promise<string> {
+  const suffix = await currentValue(ctx, resolved);
   return `Value for ${resolved.name}${suffix === undefined ? "" : ` [currently ${suffix}]`}: `;
 }
 
-function currentValue(ctx: Context, resolved: Resolved): string | undefined {
+async function currentValue(ctx: Context, resolved: Resolved): Promise<string | undefined> {
   let existing: Rule | undefined;
   let rules: readonly Rule[] = [];
   try {
@@ -227,7 +227,7 @@ function currentValue(ctx: Context, resolved: Resolved): string | undefined {
   if (holder.source === "plain") return holder.value;
 
   try {
-    const stored = ctx.secretStore().get(holder.dir, resolved.name);
+    const stored = await ctx.secretStore().get(holder.dir, resolved.name);
     return stored === null ? undefined : maskSecret(stored);
   } catch {
     return undefined;
@@ -246,20 +246,20 @@ const SET_USAGE = "usage: slopenv set NAME[=VALUE] [DIR] [--secret] [--alias TEX
  * so the dangerous case is caught by detection rather than by making every
  * ordinary variable pay for it.
  */
-export function cmdSet(argv: readonly string[], ctx: Context): number {
+export async function cmdSet(argv: readonly string[], ctx: Context): Promise<number> {
   const resolved = resolveMutateArgs(argv, ctx, SET_USAGE, "set");
-  return resolved.secret ? setSecret(ctx, resolved) : setPlain(ctx, resolved);
+  return resolved.secret ? await setSecret(ctx, resolved) : await setPlain(ctx, resolved);
 }
 
-function setSecret(ctx: Context, resolved: Resolved): number {
+async function setSecret(ctx: Context, resolved: Resolved): Promise<number> {
   warnIfRisky(ctx, resolved.name);
 
-  const value = resolved.value ?? readValue(promptFor(ctx, resolved), { hidden: true });
+  const value = resolved.value ?? readValue(await promptFor(ctx, resolved), { hidden: true });
   if (value === "") fail("refusing to store an empty value");
 
   // Keychain first: if this fails there must be no rule pointing at a secret that
   // isn't there. `set` verifies its own round-trip and throws if it can't.
-  ctx.secretStore().set(resolved.dir, resolved.name, value);
+  await ctx.secretStore().set(resolved.dir, resolved.name, value);
 
   let stored: Rule | undefined;
   let replaced: Rule | undefined;
@@ -276,7 +276,7 @@ function setSecret(ctx: Context, resolved: Resolved): number {
     });
   } catch (err) {
     ctx.err(
-      `slopenv: the keychain entry for ${resolved.name} was written but the rules file was not updated — ` +
+      `slopenv: the secret-store entry for ${resolved.name} was written but the rules file was not updated — ` +
         `remove the orphan with: slopenv rm ${resolved.name} ${resolved.dir}\n`,
     );
     throw err;
@@ -288,11 +288,11 @@ function setSecret(ctx: Context, resolved: Resolved): number {
   return 0;
 }
 
-function setPlain(ctx: Context, resolved: Resolved): number {
+async function setPlain(ctx: Context, resolved: Resolved): Promise<number> {
   warnIfRisky(ctx, resolved.name);
 
   // Plain values are not secret, so the prompt echoes — you can see what you type.
-  const value = resolved.value ?? readValue(promptFor(ctx, resolved), { hidden: false });
+  const value = resolved.value ?? readValue(await promptFor(ctx, resolved), { hidden: false });
   confirmPlaintext(ctx, resolved, value);
 
   let stored: Rule | undefined;
@@ -312,11 +312,11 @@ function setPlain(ctx: Context, resolved: Resolved): number {
   // A plain rule replacing a secret must not leave the secret behind in the keychain.
   if (usesKeychain(replaced)) {
     try {
-      ctx.secretStore().remove(resolved.dir, resolved.name);
-      ctx.err(`slopenv: replaced a keychain rule — deleted the keychain entry for ${resolved.name}\n`);
+      await ctx.secretStore().remove(resolved.dir, resolved.name);
+      ctx.err(`slopenv: replaced a secret rule — deleted the secret-store entry for ${resolved.name}\n`);
     } catch (err) {
       ctx.err(
-        `slopenv: could not delete the replaced keychain entry for ${resolved.name}: ${(err as Error).message}\n`,
+        `slopenv: could not delete the replaced secret-store entry for ${resolved.name}: ${(err as Error).message}\n`,
       );
     }
   }
@@ -338,7 +338,7 @@ function countLinks(n: number): string {
  * a second copy of the same secret in the keychain and give you two places to
  * rotate it, which is exactly the thing this tool exists to avoid.
  */
-export function cmdLink(argv: readonly string[], ctx: Context): number {
+export async function cmdLink(argv: readonly string[], ctx: Context): Promise<number> {
   const usage = "usage: slopenv link NAME --from SRCDIR [DIR] [--alias TEXT]";
   const args = parseArgs(argv, { value: ["from", "dir", "alias"] });
 
@@ -407,10 +407,10 @@ export function cmdLink(argv: readonly string[], ctx: Context): number {
   // secret behind in the keychain.
   if (usesKeychain(replaced)) {
     try {
-      ctx.secretStore().remove(dir, name);
-      ctx.err(`slopenv: replaced a keychain rule — deleted the keychain entry for ${name}\n`);
+      await ctx.secretStore().remove(dir, name);
+      ctx.err(`slopenv: replaced a secret rule — deleted the secret-store entry for ${name}\n`);
     } catch (err) {
-      ctx.err(`slopenv: could not delete the replaced keychain entry for ${name}: ${(err as Error).message}\n`);
+      ctx.err(`slopenv: could not delete the replaced secret-store entry for ${name}: ${(err as Error).message}\n`);
     }
   }
 
@@ -419,7 +419,7 @@ export function cmdLink(argv: readonly string[], ctx: Context): number {
   return 0;
 }
 
-export function cmdRm(argv: readonly string[], ctx: Context): number {
+export async function cmdRm(argv: readonly string[], ctx: Context): Promise<number> {
   const usage = "usage: slopenv rm NAME [DIR] [--force]";
   const args = parseArgs(argv, { value: ["dir"], boolean: ["force"], short: { f: "force" } });
   const name = args.positional[0];
@@ -460,8 +460,8 @@ export function cmdRm(argv: readonly string[], ctx: Context): number {
 
   const alsoRemoved = cascaded.length === 0 ? "" : `, and ${cascaded.length} link${cascaded.length === 1 ? "" : "s"} to it`;
   if (usesKeychain(removed)) {
-    ctx.secretStore().remove(dir, name);
-    const what = removed.source === "vault" ? "its cached value" : "its keychain entry";
+    await ctx.secretStore().remove(dir, name);
+    const what = removed.source === "vault" ? "its cached value" : "its secret-store entry";
     ctx.out(`removed ${name} (${dir}) and ${what}${alsoRemoved}\n`);
   } else {
     ctx.out(`removed ${name} (${dir})${alsoRemoved}\n`);

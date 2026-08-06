@@ -109,13 +109,14 @@ export function applyStatements(env: Record<string, string | undefined>, stateme
   }
 }
 
-/**
- * `run` became async-capable when `update` landed, but every other command is
- * still synchronous. This keeps the tests for those readable, and fails loudly
- * if one of them quietly starts returning a promise.
- */
+/** Run any command through the same async boundary as the real CLI entry point. */
+export async function runAsync(argv: readonly string[], ctx: Context): Promise<number> {
+  return await run(argv, ctx);
+}
+
+/** Keep purely synchronous command tests concise. */
 export function runSync(argv: readonly string[], ctx: Context): number {
   const result = run(argv, ctx);
-  if (typeof result !== "number") throw new Error(`${argv[0]} returned a promise; await it in the test`);
+  if (typeof result !== "number") throw new Error(`${argv[0]} returned a promise; use runAsync in the test`);
   return result;
 }

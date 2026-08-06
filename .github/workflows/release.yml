@@ -13,9 +13,65 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: macos-latest
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - run: sudo apt-get update -qq && sudo apt-get install -y zsh gnome-keyring dbus-x11
+      - run: bun install --frozen-lockfile
+
+      - name: Check the tag matches package.json
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          PKG="v$(bun --print 'require("./package.json").version')"
+          echo "tag=$TAG package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $TAG does not match package.json version $PKG — bump package.json or retag"
+            exit 1
+          fi
+
+      - run: bunx tsc --noEmit --noUnusedLocals --noUnusedParameters
+      - run: bun test
+
+      - name: Test Linux Secret Service integration
+        shell: bash
+        run: |
+          KEYRING_HOME="$RUNNER_TEMP/keyring-home"
+          mkdir -m 700 "$KEYRING_HOME"
+          dbus-run-session -- bash -c '
+            export HOME="$1"
+            eval "$(printf "slopenv-ci-keyring\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            cd "$2"
+            SLOPENV_SECRET_STORE_IT=1 bun test test/keychain.test.ts
+          ' _ "$KEYRING_HOME" "$GITHUB_WORKSPACE"
+
+  build:
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-latest
+            target: bun-darwin-arm64
+            asset: slopenv-darwin-arm64
+          - runner: macos-latest
+            target: bun-darwin-x64
+            asset: slopenv-darwin-x64
+          - runner: ubuntu-latest
+            target: bun-linux-arm64
+            asset: slopenv-linux-arm64
+          - runner: ubuntu-latest
+            target: bun-linux-x64
+            asset: slopenv-linux-x64
+
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -27,34 +83,31 @@ jobs:
 
       - run: bun install --frozen-lockfile
 
-      - name: Check the tag matches package.json
-        # `slopenv --version` reads package.json, so a mismatch here would ship a
-        # binary that lies about which release it is. Fail loudly instead.
-        run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          PKG="v$(bun --print 'require("./package.json").version')"
-          echo "tag=$TAG package.json=$PKG"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::tag $TAG does not match package.json version $PKG — bump package.json or retag"
-            exit 1
-          fi
-
-      - name: Test
-        run: bun test
-
-      - name: Build both macOS architectures
-        # Only macOS: the keychain has no backend elsewhere and `set --secret`
-        # fails on purpose, so shipping a Linux binary would just be a slower way
-        # to print that error.
+      - name: Build ${{ matrix.asset }}
         run: |
           mkdir -p dist
-          for target in bun-darwin-arm64 bun-darwin-x64; do
-            arch="${target#bun-darwin-}"
-            bun build --compile --minify --bytecode --target="$target" src/cli.ts --outfile "dist/slopenv-darwin-$arch"
-            tar -czf "dist/slopenv-darwin-$arch.tar.gz" -C dist "slopenv-darwin-$arch"
-            rm "dist/slopenv-darwin-$arch"
-          done
-          cd dist && shasum -a 256 *.tar.gz > SHA256SUMS && cat SHA256SUMS
+          bun build --compile --minify --bytecode --target="${{ matrix.target }}" src/cli.ts --outfile "dist/${{ matrix.asset }}"
+          tar -czf "dist/${{ matrix.asset }}.tar.gz" -C dist "${{ matrix.asset }}"
+          rm "dist/${{ matrix.asset }}"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: slopenv-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS
 
       - name: Publish the release
         env:
@@ -63,31 +116,35 @@ jobs:
         run: |
           TAG="${{ github.event.inputs.tag || github.ref_name }}"
 
-          # A quoted heredoc so backticks and $(...) in the install snippet stay
-          # literal; the two placeholders are substituted afterwards.
           cat > notes.md <<'NOTES'
           ## Install
 
           ```sh
-          # Apple Silicon
-          curl -fsSL https://github.com/__REPO__/releases/download/__TAG__/slopenv-darwin-arm64.tar.gz | tar xz
-          # Intel: swap arm64 for x64
-
-          mv slopenv-darwin-* ~/.local/bin/slopenv     # or anywhere on your PATH
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64) ASSET=slopenv-darwin-arm64 ;;
+            Darwin-x86_64) ASSET=slopenv-darwin-x64 ;;
+            Linux-aarch64|Linux-arm64) ASSET=slopenv-linux-arm64 ;;
+            Linux-x86_64) ASSET=slopenv-linux-x64 ;;
+            *) echo "unsupported platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/__REPO__/releases/download/__TAG__/$ASSET.tar.gz" | tar xz
+          mv "$ASSET" ~/.local/bin/slopenv
           echo 'eval "$(slopenv hook zsh)"' >> ~/.zshrc
           ```
 
           Open a new shell, then run `slopenv doctor`.
 
-          macOS only: secrets live in the Keychain and there is no backend for other
-          platforms yet, so `set --secret` fails loudly rather than falling back to disk.
-          Check a download against `SHA256SUMS`.
+          Linux secret storage uses the desktop Secret Service through libsecret.
+          Install or enable GNOME Keyring, KWallet, or KeePassXC's Secret Service
+          integration before using `set --secret`. Check downloads against
+          `SHA256SUMS`.
           NOTES
 
-          sed -i '' -e "s|__TAG__|$TAG|g" -e "s|__REPO__|$REPO|g" notes.md
+          sed -i -e "s|__TAG__|$TAG|g" -e "s|__REPO__|$REPO|g" notes.md
           cat notes.md
 
           gh release create "$TAG" dist/* \
+            --repo "$REPO" \
             --title "slopenv $TAG" \
             --notes-file notes.md \
             --generate-notes

@@ -58,15 +58,20 @@ function engineFor(rule: Rule): VaultEngine {
  * A rule stored in the file therefore has nothing to do here except report what
  * changed; `record` carries its value to disk.
  */
-function cache(ctx: Context, rule: Rule, previousRule: Rule | undefined, value: string): { changed: boolean } {
+async function cache(
+  ctx: Context,
+  rule: Rule,
+  previousRule: Rule | undefined,
+  value: string,
+): Promise<{ changed: boolean }> {
   // A rule that has stopped keeping its value in the keychain must not leave the
   // old copy behind — that is how a keychain fills up with secrets whose rules
   // are long gone.
   if (usesKeychain(previousRule) && !usesKeychain(rule)) {
     try {
-      ctx.secretStore().remove(rule.dir, rule.name);
+      await ctx.secretStore().remove(rule.dir, rule.name);
     } catch (err) {
-      ctx.err(`slopenv: could not delete the keychain entry for ${rule.name}: ${(err as Error).message}\n`);
+      ctx.err(`slopenv: could not delete the secret-store entry for ${rule.name}: ${(err as Error).message}\n`);
     }
   }
 
@@ -76,12 +81,12 @@ function cache(ctx: Context, rule: Rule, previousRule: Rule | undefined, value: 
   // A missing entry reads as a change, which is exactly right.
   let previous: string | null = null;
   try {
-    previous = ctx.secretStore().get(rule.dir, rule.name);
+    previous = await ctx.secretStore().get(rule.dir, rule.name);
   } catch {
     previous = null;
   }
 
-  if (previous !== value) ctx.secretStore().set(rule.dir, rule.name, value);
+  if (previous !== value) await ctx.secretStore().set(rule.dir, rule.name, value);
   return { changed: previous !== value };
 }
 
@@ -98,7 +103,7 @@ function confirmPlaintext(ctx: Context, rule: Rule, value: string, assumeYes: bo
 
   ctx.err(`slopenv: ${describeSuspicion(rule.name, suspicion)}.\n`);
   ctx.err(`  --plain writes it to ${ctx.rulesPath} in plain text.\n`);
-  ctx.err(`  Without --plain it goes to the keychain instead, and \`list\` shows only the last four characters.\n`);
+  ctx.err(`  Without --plain it goes to the OS secret store, and \`list\` shows only the last four characters.\n`);
 
   if (!isInteractive()) {
     fail(`refusing to write what looks like a credential to the rules file. Pass --yes to override, or drop --plain.`);
@@ -127,7 +132,7 @@ export async function cmdPull(argv: readonly string[], ctx: Context): Promise<nu
     `usage: slopenv pull NAME --ref "op://Vault/Item/field" [DIR] [--alias TEXT] [--ttl 30d]\n` +
     `       slopenv pull NAME [DIR]      re-fetch a reference you already have\n` +
     `       slopenv pull --all           re-fetch every one of them\n` +
-    `\nBy default the value goes to the keychain, because it came out of a secret\n` +
+    `\nBy default the value goes to the OS secret store, because it came out of a secret\n` +
     `manager. --plain keeps it in the rules file instead, in the clear, for the\n` +
     `things in your vault that are not secrets. --secret moves one back.`;
 
@@ -184,13 +189,13 @@ export async function cmdPull(argv: readonly string[], ctx: Context): Promise<nu
     confirmPlaintext(ctx, rule, value, args.flags.has("yes") || args.flags.has("force"));
     rule.value = value;
   }
-  const { changed } = cache(ctx, rule, existing, value);
+  const { changed } = await cache(ctx, rule, existing, value);
 
   try {
     record(ctx, [rule], now);
   } catch (err) {
     ctx.err(
-      `slopenv: ${name} was cached in the keychain but the rules file was not updated — ` +
+      `slopenv: ${name} was cached in the secret store but the rules file was not updated — ` +
         `nothing will use it until that is fixed.\n`,
     );
     throw err;
@@ -262,7 +267,7 @@ async function pullAll(ctx: Context, now: Date): Promise<number> {
     }
     try {
       const next: Rule = rule.store === "file" ? { ...rule, value: result.value } : rule;
-      const { changed } = cache(ctx, next, rule, result.value);
+      const { changed } = await cache(ctx, next, rule, result.value);
       pulled.push(next);
       const shown = rule.store === "file" ? result.value : maskSecret(result.value);
       ctx.out(`  ${changed ? "pulled   " : "unchanged"}  ${rule.name} (${tilde(rule.dir)})  ${shown}\n`);

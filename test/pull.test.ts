@@ -149,7 +149,7 @@ describe("pull", () => {
 });
 
 describe("when op fails", () => {
-  test("nothing is written — no rule, no keychain entry", async () => {
+  test("nothing is written — no rule, no secret-store entry", async () => {
     fakeOp(`echo '[ERROR] item "Nope" doesn.t exist' >&2; exit 1`);
     await expect(cli("pull", "TOKEN", "--ref", "op://Work/Nope/credential")).rejects.toThrow(/could not read/);
 
@@ -476,7 +476,7 @@ describe("the hot path never talks to the vault", () => {
 
   test("a reference with no cached value yet points at pull, not set", async () => {
     const rule: Rule = { dir: work, name: "TOKEN", source: "vault", ref: "op://a/b/c", engine: "1password" };
-    const plan = computePlan({
+    const plan = await computePlan({
       rules: [rule],
       pwd: work,
       prevState: emptyState(),
@@ -499,7 +499,7 @@ describe("the hot path never talks to the vault", () => {
       fetched: new Date("2026-01-01T00:00:00Z").toISOString(),
       ttl: 30 * 86_400,
     };
-    const plan = computePlan({
+    const plan = await computePlan({
       rules: [rule],
       pwd: work,
       prevState: emptyState(),
@@ -526,7 +526,7 @@ describe("the hot path never talks to the vault", () => {
       engine: "1password",
       fetched: new Date("2020-01-01T00:00:00Z").toISOString(),
     };
-    const plan = computePlan({ rules: [rule], pwd: work, prevState: emptyState(), env: {}, store, rev: "r1" });
+    const plan = await computePlan({ rules: [rule], pwd: work, prevState: emptyState(), env: {}, store, rev: "r1" });
     expect(plan.warnings).toEqual([]);
   });
 });

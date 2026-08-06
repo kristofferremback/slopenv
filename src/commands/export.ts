@@ -16,7 +16,7 @@ import { decodeState, encodeState, pauseEndedNotice, STATE_VAR, type State } fro
  * is what keeps them from drifting into three slightly different ideas of what the
  * shell should end up with.
  */
-export function emitPlan(ctx: Context, pwd: string, prevState: State): Plan {
+export async function emitPlan(ctx: Context, pwd: string, prevState: State): Promise<Plan> {
   const rev = fingerprint(ctx.rulesPath);
   const rules = loadRules(ctx.rulesPath).rules;
 
@@ -25,7 +25,7 @@ export function emitPlan(ctx: Context, pwd: string, prevState: State): Plan {
       `paused=${prevState.paused ?? "no"}`,
   );
 
-  const plan = computePlan({
+  const plan = await computePlan({
     rules,
     pwd,
     prevState,
@@ -74,8 +74,8 @@ export function emitPlan(ctx: Context, pwd: string, prevState: State): Plan {
  * with empty stdout, because the hook skips the `eval` on a non-zero exit; a
  * partial script is the one thing that could wedge a shell.
  */
-export function cmdExport(argv: readonly string[], ctx: Context): number {
+export async function cmdExport(argv: readonly string[], ctx: Context): Promise<number> {
   const pwd = resolvePwd(argv[0] ?? ctx.cwd);
-  emitPlan(ctx, pwd, decodeState(ctx.env[STATE_VAR]));
+  await emitPlan(ctx, pwd, decodeState(ctx.env[STATE_VAR]));
   return 0;
 }

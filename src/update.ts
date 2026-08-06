@@ -26,13 +26,13 @@ export interface Release {
 
 /** Asset published for a platform and architecture. */
 export function assetNameFor(platform: string, arch: string): string {
-  if (platform !== "darwin") {
-    fail(`no build for this platform (${platform}); slopenv only ships macOS binaries`);
+  if (platform !== "darwin" && platform !== "linux") {
+    fail(`no build for this platform (${platform}); slopenv ships macOS and Linux binaries`);
   }
   if (arch !== "arm64" && arch !== "x64") {
     fail(`no build for this architecture (${arch}); slopenv ships arm64 and x64`);
   }
-  return `slopenv-darwin-${arch}.tar.gz`;
+  return `slopenv-${platform}-${arch}.tar.gz`;
 }
 
 /** Numeric compare of `x.y.z`, ignoring a leading `v`. Returns >0 if a is newer. */

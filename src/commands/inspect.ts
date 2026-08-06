@@ -36,14 +36,14 @@ function table(rows: readonly string[][], out: (text: string) => void): void {
  * The value a rule produces, ready to print: masked for a secret, followed through
  * for a link. Never throws — an unreadable keychain should not take down `list`.
  */
-function shownValue(ctx: Context, rules: readonly Rule[], rule: Rule): string {
+async function shownValue(ctx: Context, rules: readonly Rule[], rule: Rule): Promise<string> {
   const holder = effectiveRule(rules, rule);
   if (!holder) return "<broken link>";
   // Anything kept in the rules file is shown in full: it is already in the clear
   // on disk, and masking it here would only pretend otherwise.
   if (holdsValueInFile(holder)) return holder.value ?? "";
   try {
-    const value = ctx.secretStore().get(holder.dir, holder.name);
+    const value = await ctx.secretStore().get(holder.dir, holder.name);
     return value === null ? "<missing>" : maskSecret(value);
   } catch {
     return "<unreadable>";
@@ -60,7 +60,7 @@ function shownAlias(rules: readonly Rule[], rule: Rule): string {
  * `•••` plus the last four characters, which is enough to tell two tokens apart
  * and not enough to use one.
  */
-export function cmdList(argv: readonly string[], ctx: Context): number {
+export async function cmdList(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, { boolean: ["json", "names", "dirs"] });
   const rules = sortRules(loadRules(ctx.rulesPath).rules);
 
@@ -97,7 +97,7 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
 
   const rows: string[][] = [header];
   for (const rule of rules) {
-    const row = [tilde(rule.dir), rule.name, rule.source, shownValue(ctx, rules, rule), shownAlias(rules, rule)];
+    const row = [tilde(rule.dir), rule.name, rule.source, await shownValue(ctx, rules, rule), shownAlias(rules, rule)];
     if (anyLinks || anyRefs) row.splice(3, 0, rule.ref ?? (rule.target ? tilde(rule.target) : ""));
     rows.push(row);
   }
@@ -108,7 +108,7 @@ export function cmdList(argv: readonly string[], ctx: Context): number {
 }
 
 /** What is active in a directory right now, and which rule put it there. */
-export function cmdStatus(argv: readonly string[], ctx: Context): number {
+export async function cmdStatus(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, {});
   const pwd = args.positional[0] ? resolveRuleDir(args.positional[0], ctx.cwd, { mustExist: false }) : resolvePwd(ctx.cwd);
 
@@ -142,7 +142,7 @@ export function cmdStatus(argv: readonly string[], ctx: Context): number {
     // from a vault.
     const origin = rule.target ? tilde(rule.target) : rule.ref;
     const from = origin ? `${tilde(rule.dir)} -> ${origin}` : tilde(rule.dir);
-    rows.push([name, rule.source, shownValue(ctx, rules, rule), from, inShell, shownAlias(rules, rule)]);
+    rows.push([name, rule.source, await shownValue(ctx, rules, rule), from, inShell, shownAlias(rules, rule)]);
   }
   table(rows, ctx.out);
 
@@ -161,7 +161,7 @@ export function cmdStatus(argv: readonly string[], ctx: Context): number {
  * One command that checks the whole install, because the failure modes are spread
  * across three places: the rules file, the keychain, and the shell hook.
  */
-export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
+export async function cmdDoctor(_argv: readonly string[], ctx: Context): Promise<number> {
   let problems = 0;
   const ok = (text: string) => ctx.out(`  ok    ${text}\n`);
   const bad = (text: string) => {
@@ -200,6 +200,16 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     return 1;
   }
 
+  ctx.out(`\nsecret store\n`);
+  try {
+    // A lookup of an account slopenv never creates checks that the platform
+    // service is reachable without writing anything or exposing a real secret.
+    await ctx.secretStore().get("/", "__SLOPENV_DOCTOR_PROBE_DO_NOT_CREATE__");
+    ok(`${ctx.secretStore().kind} is reachable`);
+  } catch (err) {
+    bad((err as Error).message);
+  }
+
   const missingDirs = rules.filter((r) => !existsSync(r.dir));
   if (missingDirs.length > 0) {
     ctx.out(`\nrule directories\n`);
@@ -234,7 +244,7 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
         cached = rule.value ?? null;
       } else {
         try {
-          cached = ctx.secretStore().get(rule.dir, rule.name);
+          cached = await ctx.secretStore().get(rule.dir, rule.name);
         } catch (err) {
           bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
           continue;
@@ -280,11 +290,11 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
 
   const secrets = rules.filter((r) => r.source === "keychain");
   if (secrets.length > 0) {
-    ctx.out(`\nkeychain (${secrets.length} secret rule${secrets.length === 1 ? "" : "s"})\n`);
+    ctx.out(`\nsecret-store entries (${secrets.length} secret rule${secrets.length === 1 ? "" : "s"})\n`);
     for (const rule of sortRules(secrets)) {
       try {
-        const value = ctx.secretStore().get(rule.dir, rule.name);
-        if (value === null) bad(`${rule.name} (${tilde(rule.dir)}): no keychain entry — re-add with \`slopenv set --secret ${rule.name} ${rule.dir}\``);
+        const value = await ctx.secretStore().get(rule.dir, rule.name);
+        if (value === null) bad(`${rule.name} (${tilde(rule.dir)}): no secret-store entry — re-add with \`slopenv set --secret ${rule.name} ${rule.dir}\``);
         else ok(`${rule.name} (${tilde(rule.dir)}): ${maskSecret(value)}`);
       } catch (err) {
         bad(`${rule.name} (${tilde(rule.dir)}): ${(err as Error).message}`);
@@ -293,7 +303,11 @@ export function cmdDoctor(_argv: readonly string[], ctx: Context): number {
     // Enumerating every generic password to find orphans would need
     // `security dump-keychain`, which prompts for permission item by item — not
     // something a health check should do to you.
-    note("orphaned keychain entries are not detected; `security dump-keychain` would prompt for every item");
+    note(
+      ctx.secretStore().kind === "macos-keychain"
+        ? "orphaned keychain entries are not detected; `security dump-keychain` would prompt for every item"
+        : "orphaned secret-store entries are not detected",
+    );
   }
 
   ctx.out(`\n${problems === 0 ? "no problems found" : `${problems} problem${problems === 1 ? "" : "s"} found`}\n`);

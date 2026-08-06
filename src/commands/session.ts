@@ -56,7 +56,7 @@ function refuseIfNotEvaluated(ctx: Context, command: string): number | null {
 }
 
 /** Turn slopenv off in this shell until you say otherwise, or leave. */
-export function cmdOff(argv: readonly string[], ctx: Context): number {
+export async function cmdOff(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, {});
   const refusal = refuseIfNotEvaluated(ctx, "off");
   if (refusal !== null) return refusal;
@@ -78,7 +78,7 @@ export function cmdOff(argv: readonly string[], ctx: Context): number {
 
   // What is actually in the shell right now, which is what the plan will restore.
   const unloaded = Object.keys(state.active).sort();
-  emitPlan(ctx, pwd, { ...state, paused: scope });
+  await emitPlan(ctx, pwd, { ...state, paused: scope });
 
   ctx.err(
     unloaded.length > 0
@@ -90,7 +90,7 @@ export function cmdOff(argv: readonly string[], ctx: Context): number {
 }
 
 /** Undo `slopenv off` without waiting to leave the directory. */
-export function cmdOn(argv: readonly string[], ctx: Context): number {
+export async function cmdOn(argv: readonly string[], ctx: Context): Promise<number> {
   const args = parseArgs(argv, {});
   const refusal = refuseIfNotEvaluated(ctx, "on");
   if (refusal !== null) return refusal;
@@ -103,7 +103,7 @@ export function cmdOn(argv: readonly string[], ctx: Context): number {
     return 0;
   }
 
-  const plan = emitPlan(ctx, pwd, { ...state, paused: null });
+  const plan = await emitPlan(ctx, pwd, { ...state, paused: null });
   const loaded = Object.keys(plan.state.active).sort();
 
   ctx.err(

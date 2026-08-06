@@ -8,10 +8,12 @@ on:
 
 jobs:
   test:
-    # macOS is not a preference here: the suite shells out to /usr/bin/security,
-    # sources the hook into a real zsh, and drives the confirmation prompt through
-    # a pty. None of that is meaningful on another platform.
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v5
@@ -20,39 +22,70 @@ jobs:
         with:
           bun-version: latest
 
+      - name: Install Linux test prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y zsh gnome-keyring dbus-x11
+
       - run: bun install --frozen-lockfile
 
       - name: Typecheck
         run: bunx tsc --noEmit --noUnusedLocals --noUnusedParameters
 
       - name: Test
-        # The keychain integration tests stay off: a CI runner has no unlocked
-        # login keychain, and they would prompt rather than fail. Run them locally
-        # with SLOPENV_KEYCHAIN_IT=1.
+        # Real secret-store integration stays opt-in: CI has neither an unlocked
+        # macOS login keychain nor a Linux desktop Secret Service session.
         run: bun test
+
+      - name: Test Linux Secret Service integration
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          KEYRING_HOME="$RUNNER_TEMP/keyring-home"
+          mkdir -m 700 "$KEYRING_HOME"
+          dbus-run-session -- bash -c '
+            export HOME="$1"
+            eval "$(printf "slopenv-ci-keyring\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            cd "$2"
+            SLOPENV_SECRET_STORE_IT=1 bun test test/keychain.test.ts
+          ' _ "$KEYRING_HOME" "$GITHUB_WORKSPACE"
 
       - name: Build
         run: bun run build
 
-      - name: Smoke-test the binary
+      - name: Smoke-test compiled Linux secret storage
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          KEYRING_HOME="$RUNNER_TEMP/compiled-keyring-home"
+          mkdir -m 700 "$KEYRING_HOME"
+          mkdir "$KEYRING_HOME/proj"
+          dbus-run-session -- bash -c '
+            export HOME="$1" SLOPENV_CONFIG="$1/rules.json"
+            eval "$(printf "slopenv-ci-keyring\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            "$2/slopenv" set --secret SLOPENV_IT_TOKEN=linux-secret "$1/proj" >/dev/null
+            "$2/slopenv" export "$1/proj" | grep -q "export SLOPENV_IT_TOKEN='"'"'linux-secret'"'"'"
+            "$2/slopenv" rm SLOPENV_IT_TOKEN "$1/proj" | grep -q "secret-store entry"
+          ' _ "$KEYRING_HOME" "$GITHUB_WORKSPACE"
+
+      - name: Smoke-test the native binary
+        shell: bash
         run: |
           ./slopenv --version
           ./slopenv hook zsh > /tmp/hook.zsh
-          zsh -n /tmp/hook.zsh          # the generated hook must at least parse
+          zsh -n /tmp/hook.zsh
           ./slopenv hook bash | bash -n
           export SLOPENV_CONFIG="$RUNNER_TEMP/rules.json"
           mkdir -p "$RUNNER_TEMP/proj"
           ./slopenv set NODE_ENV=development "$RUNNER_TEMP/proj"
           ./slopenv list
           ./slopenv export "$RUNNER_TEMP/proj" | grep -q "export NODE_ENV='development'"
-          # A linked directory must export the value the original holds.
           mkdir -p "$RUNNER_TEMP/other"
           ./slopenv link NODE_ENV --from "$RUNNER_TEMP/proj" "$RUNNER_TEMP/other"
           ./slopenv export "$RUNNER_TEMP/other" | grep -q "export NODE_ENV='development'"
 
-      - name: Upload build
+      - name: Upload native build
         uses: actions/upload-artifact@v5
         with:
-          name: slopenv-${{ github.sha }}
+          name: slopenv-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
           path: slopenv
           retention-days: 30

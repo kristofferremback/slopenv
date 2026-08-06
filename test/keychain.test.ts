@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { MacosKeychainStore, parseSecurityPassword, quoteForSecurityStdin } from "../src/secrets/macos.ts";
+import { LinuxSecretServiceStore, type BunSecretsApi } from "../src/secrets/linux.ts";
 import { accountFor, defaultSecretStore } from "../src/secrets/index.ts";
 
 /**
@@ -73,14 +74,87 @@ describe("account naming", () => {
 
 describe("platform gate", () => {
   test("an unsupported platform fails clearly instead of falling back to disk", () => {
-    const store = defaultSecretStore("linux");
-    expect(() => store.get("/a", "T")).toThrow(/no keychain backend for this platform/);
-    expect(() => store.set("/a", "T", "v")).toThrow(/no keychain backend for this platform/);
-    expect(() => store.remove("/a", "T")).toThrow(/no keychain backend for this platform/);
+    const store = defaultSecretStore("freebsd");
+    expect(() => store.get("/a", "T")).toThrow(/no secret-store backend/);
+    expect(() => store.set("/a", "T", "v")).toThrow(/no secret-store backend/);
+    expect(() => store.remove("/a", "T")).toThrow(/no secret-store backend/);
   });
 
   test("macOS gets the keychain store", () => {
     expect(defaultSecretStore("darwin").kind).toBe("macos-keychain");
+  });
+
+  test("Linux gets the Secret Service store", () => {
+    expect(defaultSecretStore("linux").kind).toBe("linux-secret-service");
+  });
+});
+
+class FakeBunSecrets implements BunSecretsApi {
+  readonly entries = new Map<string, string>();
+  failWith: Error | undefined;
+
+  async get(options: { service: string; name: string }): Promise<string | null> {
+    if (this.failWith) throw this.failWith;
+    return this.entries.get(`${options.service}:${options.name}`) ?? null;
+  }
+
+  async set(options: { service: string; name: string; value: string }): Promise<void> {
+    if (this.failWith) throw this.failWith;
+    this.entries.set(`${options.service}:${options.name}`, options.value);
+  }
+
+  async delete(options: { service: string; name: string }): Promise<boolean> {
+    if (this.failWith) throw this.failWith;
+    return this.entries.delete(`${options.service}:${options.name}`);
+  }
+}
+
+describe("Linux Secret Service", () => {
+  test("round-trips, replaces, and removes through Bun.secrets", async () => {
+    const api = new FakeBunSecrets();
+    const store = new LinuxSecretServiceStore(api);
+
+    expect(await store.get("/dev/a", "TOKEN")).toBeNull();
+    await store.set("/dev/a", "TOKEN", "first");
+    expect(await store.get("/dev/a", "TOKEN")).toBe("first");
+    await store.set("/dev/a", "TOKEN", "second");
+    expect(await store.get("/dev/a", "TOKEN")).toBe("second");
+    await store.remove("/dev/a", "TOKEN");
+    expect(await store.get("/dev/a", "TOKEN")).toBeNull();
+    await store.remove("/dev/a", "TOKEN");
+  });
+
+  test("identifies a missing Secret Service with setup advice", async () => {
+    const api = new FakeBunSecrets();
+    api.failWith = new Error("The name org.freedesktop.secrets was not provided by any .service files");
+    const store = new LinuxSecretServiceStore(api);
+
+    await expect(store.get("/a", "TOKEN")).rejects.toThrow(/Install and start GNOME Keyring, KWallet/);
+  });
+
+  test("explains how to initialize a missing login collection", async () => {
+    const api = new FakeBunSecrets();
+    api.failWith = new Error("Object does not exist at path /org/freedesktop/secrets/collection/login");
+    const store = new LinuxSecretServiceStore(api);
+
+    await expect(store.set("/a", "TOKEN", "v")).rejects.toThrow(/log out and back in/);
+  });
+});
+
+const linuxIntegration = process.env.SLOPENV_SECRET_STORE_IT === "1" && process.platform === "linux";
+describe.if(linuxIntegration)("Linux Secret Service (integration)", () => {
+  test("round-trips through the session's real provider", async () => {
+    const store = new LinuxSecretServiceStore();
+    const dir = `/tmp/slopenv-integration-${process.pid}`;
+    const name = "SLOPENV_IT_TOKEN";
+    const value = `quotes-'\"-unicode-🔑-${Date.now()}`;
+    try {
+      await store.set(dir, name, value);
+      expect(await store.get(dir, name)).toBe(value);
+    } finally {
+      await store.remove(dir, name);
+    }
+    expect(await store.get(dir, name)).toBeNull();
   });
 });
 
