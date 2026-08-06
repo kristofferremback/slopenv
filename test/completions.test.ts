@@ -145,6 +145,11 @@ describe("pressing TAB in a real zsh", () => {
       { mode: 0o755 },
     );
 
+    // Ubuntu's global zshrc runs compinit before this one and hosted runners can
+    // have intentionally group-writable system completion directories. Own the
+    // setup here so the test never blocks on that unrelated security prompt.
+    writeFileSync(join(zdotdir, ".zshenv"), "skip_global_compinit=1\n");
+
     writeFileSync(
       join(zdotdir, ".zshrc"),
       [
